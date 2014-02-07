@@ -50,7 +50,7 @@ CREATE SEQUENCE consumer_id_seq
 
 
 CREATE TABLE dmq (
-    id integer DEFAULT nextval('seq'::regclass) NOT NULL,
+    id integer DEFAULT nextval('qt_model_id_seq'::regclass) NOT NULL,
     added timestamp without time zone NOT NULL,
     iid text NOT NULL,
     delayed_until timestamp without time zone NOT NULL,
@@ -78,7 +78,7 @@ CREATE SEQUENCE queue_id_seq
 
 
 CREATE TABLE tempq (
-    id integer DEFAULT nextval('seq'::regclass) NOT NULL,
+    id integer DEFAULT nextval('qt_model_id_seq'::regclass) NOT NULL,
     added timestamp without time zone NOT NULL,
     iid text NOT NULL,
     delayed_until timestamp without time zone NOT NULL,
