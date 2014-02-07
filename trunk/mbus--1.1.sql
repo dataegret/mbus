@@ -1292,5 +1292,11 @@ CREATE FUNCTION trigger_work_to_jms_trigger_queue_testing(t qt_model) RETURNS bo
 
 
 
+SELECT pg_catalog.pg_extension_config_dump('consumer', '');
+SELECT pg_catalog.pg_extension_config_dump('qt_model', '');
+SELECT pg_catalog.pg_extension_config_dump('dmq', '');
+SELECT pg_catalog.pg_extension_config_dump('queue', '');
+SELECT pg_catalog.pg_extension_config_dump('trigger', '');
+
 
 
