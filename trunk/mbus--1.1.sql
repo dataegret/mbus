@@ -2,6 +2,21 @@
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION mbus" to load this file. \quit
 
+CREATE SEQUENCE seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+CREATE SEQUENCE qt_model_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
 
 CREATE TABLE qt_model (
 	id integer NOT NULL,
@@ -34,18 +49,8 @@ CREATE SEQUENCE consumer_id_seq
     CACHE 1;
 
 
-
-CREATE SEQUENCE qt_model_id_seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
-
 CREATE TABLE dmq (
-    id integer DEFAULT nextval('qt_model_id_seq'::regclass) NOT NULL,
+    id integer DEFAULT nextval('seq'::regclass) NOT NULL,
     added timestamp without time zone NOT NULL,
     iid text NOT NULL,
     delayed_until timestamp without time zone NOT NULL,
@@ -72,18 +77,8 @@ CREATE SEQUENCE queue_id_seq
     CACHE 1;
 
 
-
-CREATE SEQUENCE seq
-    START WITH 1
-    INCREMENT BY 1
-    NO MINVALUE
-    NO MAXVALUE
-    CACHE 1;
-
-
-
 CREATE TABLE tempq (
-    id integer DEFAULT nextval('qt_model_id_seq'::regclass) NOT NULL,
+    id integer DEFAULT nextval('seq'::regclass) NOT NULL,
     added timestamp without time zone NOT NULL,
     iid text NOT NULL,
     delayed_until timestamp without time zone NOT NULL,
@@ -1292,11 +1287,11 @@ CREATE FUNCTION trigger_work_to_jms_trigger_queue_testing(t qt_model) RETURNS bo
 
 
 
-SELECT pg_catalog.pg_extension_config_dump('consumer', '');
 SELECT pg_catalog.pg_extension_config_dump('qt_model', '');
+SELECT pg_catalog.pg_extension_config_dump('consumer', '');
 SELECT pg_catalog.pg_extension_config_dump('dmq', '');
 SELECT pg_catalog.pg_extension_config_dump('queue', '');
 SELECT pg_catalog.pg_extension_config_dump('trigger', '');
 
-
-
+alter extension mbus drop sequence seq;
+alter extension mbus drop sequence qt_model_id_seq;
