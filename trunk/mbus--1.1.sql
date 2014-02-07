@@ -149,50 +149,73 @@ ALTER TABLE ONLY trigger
 
 CREATE INDEX tempq_name_added ON tempq USING btree (((headers -> 'tempq'::text)), added) WHERE ((headers -> 'tempq'::text) IS NOT NULL);
 
+CREATE OR REPLACE FUNCTION quote_html(s text)
+  RETURNS text AS
+$BODY$
+ select replace(replace(replace(replace($1,'"','&quot;'),'&','&amp;'),'<','&lt;'),'>','&gt;')
+$BODY$
+  LANGUAGE sql IMMUTABLE
+  COST 100;
+
 
 CREATE OR REPLACE FUNCTION string_format(format text, param hstore)
-RETURNS text 
-LANGUAGE sql IMMUTABLE
-AS
+  RETURNS text AS
 $BODY$
-	/*
-	formats string using template
-	%[name] - inserting quote_literal(param->'<NAME>')
-	%{name} - quote_ident
-
-	select string_format('%[name] is %{value} and n=%[n] and name=%[name} %%[v]', hstore('name','lala') || hstore('value', 'The Value')||hstore('n',n::text))  from generate_series(1,1000) as gs(n); 
-	*/
-select 
-	array_to_string(
-   		array(
-     			select
-				case when s[1] like '^%{%}' escape '^'
-				      then quote_ident($2->(substr(s[1],3,length(s[1])-3)))
-				      when s[1] like '^%[%]' escape '^'
-				      then quote_literal($2->(substr(s[1],3,length(s[1])-3)))
-				      when s[1] like '^%<%>' escape '^'
-				      then ($2->(substr(s[1],3,length(s[1])-3)))
-				else
-					s[1]
-				end as s
-      		 	from regexp_matches($1, 
-                        	$RE$
-                         	(
-                          	% [[{<] \w+ []}>]
-                          	|
-                          	%%
-                          	|
-                          	(?: [^%]+ | %(?! [[{] ) )
-                         	)
-                         	$RE$,
-                         	'gx')
-                        as re(s)
-      
-		),
-  	'');
-
+/*
+Форматирует строку в соответствии с заданным шаблоном
+%"name" || || %{name} - quote_ident
+%'name' || %[name] - вставляется quote_literal(param->'name')
+%<var> - as is
+%#html# - quote_html
+%[-!@#$^&*=+] - т.е. %-, %!, %@, %#, %$, %^, %&, &* - то as is из param->'-', param->'!' и т.п.
+explain analyze
+select string_format($$%"name" == %{name} is %[value] == %'value' and n=%<n> and name=%'name' %%<v> and html=%#amp# and %#$$, hstore('name','la la') || hstore('value', 'The Value')||hstore('n',n::text)||hstore('amp','<a href="lakak">')||hstore('#','hash sign'))
+  from generate_series(1,100) as gs(n);
+*/
+select
+  string_agg(
+         case when s[1] like '^%"%"' escape '^' or s[1] like '^%{%}' escape '^'
+                then coalesce(quote_ident($2->(substr(s[1],3,length(s[1])-3))),quote_ident(''))
+              when s[1] like $$^%'%'$$ escape '^' or s[1] like $$^%[%]$$ escape '^'
+                then coalesce(quote_literal($2->(substr(s[1],3,length(s[1])-3))),quote_literal(''))
+              when s[1] like '^%<%>' escape '^'
+                then coalesce($2->(substr(s[1],3,length(s[1])-3)),'')
+              when s[1] like '^%#%#' escape '^'
+                then coalesce(quote_html(($2->(substr(s[1],3,length(s[1])-3)))),'')
+              when s[1] ~ '%[-!@#$^&*=+]'
+                then coalesce($2->(substr(s[1],2,1)),'')
+              when s[1]='%%'
+                then '%'
+              else
+               s[1]
+         end,'') as s
+      from regexp_matches($1,
+                         $RE$
+                         (%%
+                          |
+                          %[$@]
+                          |
+                          % ([['"<{#]) [$@\w]+ ([]"'>}#])
+                          |
+                          %[-!@#$^&*=+]
+                          |
+                          (?: [^%]+ | %(?! [<{'"] ) )
+                         )
+                         $RE$,
+                         'gx')
+                         as re(s);
 $BODY$
-COST 100;
+  LANGUAGE sql IMMUTABLE
+  COST 100;
+
+create or replace function raise_exception(exc text) returns void as
+$code$
+ begin
+  raise exception '%', exc;
+ end;
+$code$
+language plpgsql;
+
 
 CREATE FUNCTION clear_tempq() 
 RETURNS void
@@ -278,6 +301,7 @@ begin
       				select * 
         				from mbus.qt$<!qname!> t
        					where <!consumer_id!><>all(received) and t.delayed_until<now() and (<!selector!>)=true and added >'<!now!>' and coalesce(expires,'2070-01-01'::timestamp) > now()::timestamp 
+                                        and (not exist(t.headers,'consume_after') or (select every(not mbus.is_msg_exists(u.v)) from unnest( ((t.headers)->'consume_after')::text[]) as u(v)))
        					order by added, delayed_until
        				limit <!consumers!>
 			loop
@@ -295,7 +319,8 @@ begin
         			into rv
         			from mbus.qt$<!qname!> t
        				where <!consumer_id!><>all(received) and t.delayed_until<now() and (<!selector!>)=true and added > '<!now!>' and coalesce(expires,'2070-01-01'::timestamp) > now()::timestamp 
-         			and pg_try_advisory_xact_lock( ('X' || md5('mbus.qt$<!qname!>.' || t.iid))::bit(64)::bigint )
+                                and ((t.headers->'consume_after') is null or (select every(not mbus.is_msg_exists(u.v)) from unnest( ((t.headers)->'consume_after')::text[]) as u(v)))
+         			and pg_try_advisory_xact_lock( hashtext(t.iid))
        				order by added, delayed_until
        				limit 1
          		for update;
@@ -355,6 +380,7 @@ begin
 			   and added > '<!now!>' 
 			   and coalesce(expires,'2070-01-01'::timestamp) > now()::timestamp 
 			   and t.iid not in (select a.iid from unnest(rvarr) as a)
+                           and (not exist(t.headers,'consume_after') or (select every(not mbus.is_msg_exists(u.v)) from unnest( ((t.headers)->'consume_after')::text[]) as u(v)))
                  	order by added, delayed_until
                 	limit amt
        		loop
@@ -378,7 +404,8 @@ begin
                     and added > '<!now!>' 
                     and coalesce(expires,'2070-01-01'::timestamp) > now()::timestamp 
                     and t.iid not in (select a.iid from unnest(rvarr) as a)
-                    and pg_try_advisory_xact_lock( ('X' || md5('mbus.qt$<!qname!>.' || t.iid))::bit(64)::bigint )
+                    and (not exist(t.headers,'consume_after') or (select every(not mbus.is_msg_exists(u.v)) from unnest( ((t.headers)->'consume_after')::text[]) as u(v)))
+                    and pg_try_advisory_xact_lock(hashtext(t.iid))
                   order by added, delayed_until
                   limit amt
                     for update
@@ -458,11 +485,11 @@ begin
 	execute 'create table ' || schname || '.qt$' || qname || '( like ' || schname || '.qt_model including all)';
 	insert into mbus.queue(qname,consumers_cnt) values(qname,consumers_cnt);
 	post_src := $post_src$
-	CREATE OR REPLACE FUNCTION mbus.post_<!qname!>(data hstore, headers hstore DEFAULT NULL::hstore, properties hstore DEFAULT NULL::hstore, delayed_until timestamp without time zone DEFAULT NULL::timestamp without time zone, expires timestamp without time zone DEFAULT NULL::timestamp without time zone)
+        CREATE OR REPLACE FUNCTION mbus.post_<!qname!>(data hstore, headers hstore DEFAULT NULL::hstore, properties hstore DEFAULT NULL::hstore, delayed_until timestamp without time zone DEFAULT NULL::timestamp without time zone, expires timestamp without time zone DEFAULT NULL::timestamp without time zone, iid text default null)
   	RETURNS text AS
 	$BDY$
- 		notify QN_<!qname!>;
  		select mbus.run_trigger('<!qname!>', $1, $2, $3, $4, $5);
+                select mbus.raise_exception('Wrong iid=' || $6 || ' for queue <!qname!>') where $6 is not null and $6 not like $Q$<!qname!>.%$Q$ and $6 not like $Q$dmq.%$Q$;
  		insert into mbus.qt$<!qname!>(data, 
                                 headers, 
                                 properties, 
@@ -476,12 +503,14 @@ begin
                                 hstore('enqueue_time',now()::timestamp::text) ||
                                 hstore('source_db', current_database())       ||
                                 hstore('destination_queue', $Q$<!qname!>$Q$)       ||
-                                case when $2 is null then hstore('seenby','{' || current_database() || '}') else hstore('seenby', (($2->'seenby')::text[] || current_database()::text)::text) end,
+                                coalesce($2,''::hstore)||
+                                case when $2 is not null and exist($2,'consume_after')  then hstore('consume_after', ($2->'consume_after')::text[]::text) else ''::hstore end ||
+                                case when $2 is null or not exist($2,'seenby') then hstore('seenby', array[ current_database() ]::text) else hstore('seenby', (($2->'seenby')::text[] || array[current_database()::text])::text) end,
                                 $3,
                                 coalesce($4, now() - '1h'::interval),
                                 $5, 
                                 now(), 
-                                current_database() || '.' || nextval('mbus.seq') || '.' || txid_current() || '.' || md5($1::text), 
+                                coalesce($6, $Q$<!qname!>$Q$ || '.' || nextval('mbus.seq')),
                                 array[]::int[] 
                                ) returning iid;
 	$BDY$
@@ -877,6 +906,28 @@ CREATE FUNCTION drop_trigger(src text, dst text) RETURNS void
  end;
 $$;
 
+CREATE FUNCTION post_dmq(data hstore, headers hstore DEFAULT NULL::hstore, properties hstore DEFAULT NULL::hstore, delayed_until timestamp without time zone DEFAULT NULL::timestamp without time zone, expires timestamp without time zone DEFAULT NULL::timestamp without time zone, iid text default null) RETURNS text
+    LANGUAGE sql
+    AS $_$
+insert into mbus.dmq(data,
+                      headers,
+                      properties,
+                      delayed_until,
+                      expires,
+                      added,
+                      iid
+                     )values(
+                      $1,
+                      $2,
+                      $3,
+                      coalesce($4, now()),
+                      $5,
+                      now(),
+                      coalesce($6,'dmq.' || nextval('mbus.seq') )
+                     ) returning iid;
+
+$_$;
+
 
 
 CREATE FUNCTION dyn_consume(qname text, selector text DEFAULT '(1=1)'::text, cname text DEFAULT 'default'::text) RETURNS SETOF qt_model
@@ -903,7 +954,7 @@ begin
           from mbus.qt$$QRY$ || qname ||$QRY$ t
          where $1<>all(received) and t.delayed_until<now() and (1=1)=true and added > $2 and coalesce(expires,'2070-01-01'::timestamp) > now()::timestamp 
            and ($QRY$ || selector ||$QRY$)
-           and pg_try_advisory_xact_lock( ('X' || md5('mbus.qt$$QRY$ || qname ||$QRY$.' || t.iid))::bit(64)::bigint )
+           and pg_try_advisory_xact_lock( hashtext(t.iid))
          order by added, delayed_until
          limit 1
            for update
@@ -960,13 +1011,16 @@ CREATE FUNCTION post_temp(tqname text, data hstore, headers hstore DEFAULT NULL:
                                 coalesce($5, now() - '1h'::interval),
                                 $6, 
                                 now(), 
-                                current_database() || '.' || nextval('mbus.seq') || '.' || txid_current() || '.' || md5($1::text), 
+                                current_database() || '.' || nextval('mbus.seq'), 
                                 array[]::int[] 
                                ) returning iid;
 
 $_$;
 
-
+create function get_iid(qname text) returns text as
+$code$
+   select $1 || nextval('mbus.seq');
+$code$
 
 CREATE FUNCTION readme() RETURNS text
 LANGUAGE sql
@@ -1138,14 +1192,50 @@ declare
  consume_qry text:='';
  oldqname text:='';
  visibilty_qry text:='';
+ msg_exists_qry text:='';
+ peek_qry text:='';
+ take_qry text:='';
 begin
  for r in select * from mbus.queue loop
    post_qry:=post_qry || $$ when '$$ || lower(r.qname) || $$' then return mbus.post_$$ || r.qname || '(data, headers, properties, delayed_until, expires);'||chr(10);
+   msg_exists_qry := msg_exists_qry || 'when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then exists(select * from mbus.qt$' || r.qname || ' q where q.iid=$1 and not mbus.build_' || r.qname ||'_record_consumer_list(row(q.*)::mbus.qt_model) <@ q.received)'||chr(10);
+   peek_qry:= peek_qry || 'when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then (select row(q.*)::mbus.qt_model from mbus.qt$' || r.qname || ' q where q.iid=$1 )'||chr(10);
+   take_qry:= take_qry || '        when msgiid like $LIKE$' || lower(r.qname) || '.%$LIKE$ then delete from mbus.qt$' || r.qname || ' q where q.iid=$1 returning (q.*) into rv;'||chr(10);
  end loop;
+
+  --create functions for tests for visibility
+  for r in 
+    select string_agg( 
+          'select '|| id::text ||' from t where 
+           ( (' 
+          || cons.selector 
+          || ')' 
+          || (case when cons.added is null then ')' else $$ and t.added > '$$ 
+          || (cons.added::text) 
+          || $$'::timestamp without time zone)$$ end),
+          chr(10) || ' union all ' ||chr(10)) as src,
+          qname
+        from mbus.consumer cons
+        group by cons.qname
+    loop
+      execute $RCL$
+      create or replace function mbus.build_$RCL$ || lower(r.qname) || $RCL$_record_consumer_list(qr mbus.qt_model) returns int[] as
+      $FUNC$
+       begin
+         return array( 
+         with t as (select qr.*)
+          $RCL$ || r.src || $RCL$ );
+       end;
+      $FUNC$
+      language plpgsql;
+      $RCL$;
+    end loop;
+
  
  if post_qry='' then
         begin
           execute 'drop function mbus.post(text, hstore, hstore, hstore, timestamp, timestamp)';
+          execute 'create or replace function mbus.is_msg_exists(msgiid text) returns boolean $code$ select false; $code$ language sql';
         exception when others then null;
         end;
  else
@@ -1166,7 +1256,56 @@ begin
         $QQ$
         language plpgsql;
         $FUNC$;
+
+        execute $FUNC$
+                create or replace function mbus.is_msg_exists(msgiid text) returns boolean as
+                $code$
+                 select
+                    case $FUNC$
+                     || msg_exists_qry ||
+                    $FUNC$
+                    else
+                     false 
+                    end or exists(select * from mbus.dmq q where q.iid=$1);
+                $code$
+                language sql
+        $FUNC$;
+
+        execute $FUNC$
+                create or replace function mbus.peek(msgiid text) returns mbus.qt_model as
+                $code$
+                 select coalesce(
+                    case $FUNC$
+                     || peek_qry ||
+                    $FUNC$
+                    else
+                     null
+                    end, (select row(q.*)::mbus.qt_model from mbus.dmq q where q.iid=$1));
+                $code$
+                language sql
+        $FUNC$;
+
+        execute $FUNC$
+                create or replace function mbus.take(msgiid text) returns mbus.qt_model as
+                $code$
+                declare
+                  rv mbus.qt_model;
+                begin
+                 perform pg_advisory_xact_lock( hashtext(msgiid));
+                    case $FUNC$
+                     || take_qry ||
+                    $FUNC$
+                    end case;
+                    if rv is null then
+                     delete from mbus.dmq q where iid=msgiid returning (q.*) into rv;
+                    end if;
+                    return rv;
+                end;
+                $code$
+                language plpgsql
+        $FUNC$;
 end if;
+
  for r2 in select * from mbus.consumer order by qname loop
    if oldqname<>r2.qname then
      if consume_qry<>'' then
@@ -1205,33 +1344,6 @@ end if;
         $FUNC$;
  end if;
  
- --create functions for tests for visibility
-  for r in 
-    select string_agg( 
-          'select '|| id::text ||' from t where 
-           ( (' 
-          || cons.selector 
-          || ')' 
-          || (case when cons.added is null then ')' else $$ and t.added > '$$ 
-          || (cons.added::text) 
-          || $$'::timestamp without time zone)$$ end),
-          chr(10) || ' union all ' ||chr(10)) as src,
-          qname
-        from mbus.consumer cons
-        group by cons.qname
-    loop
-      execute $RCL$
-      create or replace function mbus.build_$RCL$ || lower(r.qname) || $RCL$_record_consumer_list(qr mbus.qt_model) returns int[] as
-      $FUNC$
-       begin
-         return array( 
-         with t as (select qr.*)
-          $RCL$ || r.src || $RCL$ );
-       end;
-      $FUNC$
-      language plpgsql;
-      $RCL$;
-    end loop;
 end;
 $_X$;
 
