@@ -1,6 +1,7 @@
-
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION mbus" to load this file. \quit
+
+SET lc_messages to 'en_US.UTF-8';
 
 CREATE SEQUENCE seq
     START WITH 1
@@ -254,7 +255,7 @@ RETURNS SETOF qt_model
 LANGUAGE plpgsql
 AS $$
 declare
-	rv mbus.qt_model;
+	rv qt_model;
 begin
 	select * into rv from mbus.tempq where (headers->'tempq')=tqname and coalesce(expires,'2070-01-01'::timestamp)>now()::timestamp and coalesce(delayed_until,'1970-01-01'::timestamp)<now()::timestamp order by added limit 1;
 	if rv.id is not null then
@@ -1021,6 +1022,7 @@ create function get_iid(qname text) returns text as
 $code$
    select $1 || nextval('mbus.seq');
 $code$
+language sql;
 
 CREATE FUNCTION readme() RETURNS text
 LANGUAGE sql
@@ -1539,3 +1541,5 @@ SELECT pg_catalog.pg_extension_config_dump('trigger', '');
 
 alter extension mbus drop sequence seq;
 alter extension mbus drop sequence qt_model_id_seq;
+alter extension mbus drop sequence consumer_id_seq;
+alter extension mbus drop sequence queue_id_seq;
