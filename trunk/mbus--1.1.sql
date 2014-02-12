@@ -255,7 +255,7 @@ RETURNS SETOF qt_model
 LANGUAGE plpgsql
 AS $$
 declare
-	rv qt_model;
+	rv mbus.qt_model;
 begin
 	select * into rv from mbus.tempq where (headers->'tempq')=tqname and coalesce(expires,'2070-01-01'::timestamp)>now()::timestamp and coalesce(delayed_until,'1970-01-01'::timestamp)<now()::timestamp order by added limit 1;
 	if rv.id is not null then
@@ -281,6 +281,9 @@ declare
 	nowtime text:=(now()::text)::timestamp without time zone;
 begin
 	selector := case when p_selector is null or p_selector ~ '^ *$' then '1=1' else p_selector end;
+        if not exists(select * from mbus.queue q where q.qname=create_consumer.qname) then
+	    raise exception 'Wrong queue name:%', create_consumer.qname;
+	end if;
  	insert into mbus.consumer(name, qname, selector, added) values(cname, qname, selector, now()::timestamp without time zone) returning id into c_id;
  	cons_src:=$CONS_SRC$
 	----------------------------------------------------------------------------------------
@@ -483,6 +486,9 @@ declare
 	clr_src text;
 	peek_src text;
 begin
+	if length(qname)>32 then
+	   raise exception 'Name % too long (32 chars max)', qname;
+	end if;
 	execute 'create table ' || schname || '.qt$' || qname || '( like ' || schname || '.qt_model including all)';
 	insert into mbus.queue(qname,consumers_cnt) values(qname,consumers_cnt);
 	post_src := $post_src$
@@ -864,7 +870,7 @@ begin
   ) loop
     case 
       when r.proname like 'post_%' then
-       execute 'drop function mbus.' || r.proname || '(hstore, hstore, hstore, timestamp without time zone, timestamp without time zone)';
+       execute 'drop function mbus.' || r.proname || '(hstore, hstore, hstore, timestamp without time zone, timestamp without time zone, text)';
       when r.proname like 'consumen_%' then
        execute 'drop function mbus.' || r.proname || '(integer)';
       when r.proname like 'peek_%' then
