@@ -150,6 +150,111 @@ ALTER TABLE ONLY trigger
 
 CREATE INDEX tempq_name_added ON tempq USING btree (((headers -> 'tempq'::text)), added) WHERE ((headers -> 'tempq'::text) IS NOT NULL);
 
+create or replace function _is_superuser() returns boolean as
+$code$
+   select rolsuper from pg_catalog.pg_roles where rolname=session_user;
+$code$
+language sql;
+
+create or replace function mbus.can_consume(qname text, cname text default 'default') returns boolean as
+$code$
+   select _is_superuser() or pg_has_role(session_user,'mbus_consume_' || $1 || '_by_' || $2,'usage')::boolean;
+$code$
+language sql;
+
+create or replace function can_post(qname text) returns boolean as
+$code$
+   select _is_superuser() or pg_has_role(session_user,'mbus_post_' || $1,'usage')::boolean;
+$code$
+language sql;
+
+
+create or replace function mbus._should_be_able_to_consume(qname text, cname text default 'default') returns void as
+$code$
+begin
+  if not _is_superuser() and not mbus.can_consume(qname, cname) then
+    raise exception 'Access denied';
+  end if;
+end;
+$code$
+language plpgsql;
+
+create or replace function mbus._should_be_able_to_post(qname text) returns void as
+$code$
+begin
+  if not _is_superuser() and not mbus.can_post(qname) then
+    raise exception 'Access denied';
+  end if;
+end;
+$code$
+language plpgsql;
+
+
+create or replace function mbus._create_consumer_role(qname text, cname text) returns void as
+$code$
+begin
+  if cname ~ $RE$\W$RE$ or length(cname)>32 then
+      raise exception 'Wrong consumer name:%', cname;
+  end if;
+
+  if not exists(select * from mbus.queue q where q.qname=_create_consumer_role.qname) then
+      raise exception 'Queue % does not exist';
+  end if;
+
+  begin
+     execute 'create role mbus_consume_' || qname || '_by_' || cname;
+  exception
+   when sqlstate '42710' -- "role already exists
+      then 
+       raise notice 'Role % already exists', cname;
+  end;
+end;
+$code$
+language plpgsql;
+
+create or replace function mbus._create_queue_role(qname text) returns void as
+$code$
+begin
+  if qname ~ $RE$\W$RE$ or length(qname)>32 then
+      raise exception 'Wrong queue name:%', qname;
+  end if;
+
+  begin
+    execute 'create role mbus_post_' || qname;
+  exception
+   when sqlstate '42710' -- "role already exists
+      then 
+       raise notice 'Role mbus_post_% already exists', qname;
+  end;
+end;
+$code$
+language plpgsql;
+
+
+create or replace function mbus._drop_consumer_role(cname text) returns void as
+$code$
+begin
+  if cname ~ $RE$\W$RE$ or length(cname)>32 then
+      raise exception 'Wrong consumer name:%', cname;
+  end if;
+  execute 'drop role mbus_consume_' || cname;
+end;
+$code$
+language plpgsql;
+
+create or replace function mbus._drop_queue_role(qname text) returns void as
+$code$
+begin
+  if cname ~ $RE$\W$RE$ or length(cname)>32 then
+      raise exception 'Wrong consumer name:%', cname;
+  end if;
+  execute 'drop role mbus_post_' || qname;
+end;
+$code$
+language plpgsql;
+
+
+
 CREATE OR REPLACE FUNCTION quote_html(s text)
   RETURNS text AS
 $BODY$
@@ -208,7 +313,7 @@ select
 $BODY$
   LANGUAGE sql IMMUTABLE
   COST 100;
-
+--'
 create or replace function raise_exception(exc text) returns void as
 $code$
  begin
@@ -224,7 +329,7 @@ LANGUAGE plpgsql
 AS $$
 begin
 	delete from mbus.trigger where dst like 'temp.%' and not exists (select * from pg_stat_activity where dst like 'temp.' || md5(pid::text || backend_start::text) || '%');
-	delete from mbus.tempq where not exists (select * from pg_stat_activity where (headers->'tempq') is null and (headers->'tempq') like 'temp.' || md5(pid::text || backend_start::text) || '%');
+	delete from mbus.tempq where not exists (select * from pg_stat_activity where (headers->'tempq') like 'temp.' || md5(pid::text || backend_start::text) || '.%');
 end;
 $$;
 
@@ -285,6 +390,8 @@ begin
 	    raise exception 'Wrong queue name:%', create_consumer.qname;
 	end if;
  	insert into mbus.consumer(name, qname, selector, added) values(cname, qname, selector, now()::timestamp without time zone) returning id into c_id;
+ 	perform mbus._create_consumer_role(qname, cname);
+
  	cons_src:=$CONS_SRC$
 	----------------------------------------------------------------------------------------
 	CREATE OR REPLACE FUNCTION mbus.consume_<!qname!>_by_<!cname!>()
@@ -299,6 +406,8 @@ begin
  		gotrecord boolean:=false;
 	begin
  		set local enable_seqscan=off;
+
+ 		perform mbus._should_be_able_to_consume('<!qname!>', '<!cname!>');
 
   		if version() like 'PostgreSQL 9.0%' then
      			for r in 
@@ -344,6 +453,7 @@ begin
 	end;
 	$DDD$
 	LANGUAGE plpgsql VOLATILE
+	SECURITY DEFINER
 	$CONS_SRC$; 
 
 	cons_src:=regexp_replace(cons_src,'<!qname!>', qname, 'g');
@@ -372,6 +482,7 @@ declare
 begin
 	set local enable_seqscan=off;
 
+ 	perform mbus._should_be_able_to_consume('<!qname!>', '<!cname!>');
 	rvarr:=array[]::mbus.qt_model[];
  	if version() like 'PostgreSQL 9.0%' then  
    		while coalesce(array_length(rvarr,1),0)<amt loop
@@ -430,6 +541,7 @@ begin
 end;
 $DDD$
 LANGUAGE plpgsql VOLATILE
+SECURITY DEFINER
 $CONSN_SRC$; 
 
  consn_src:=regexp_replace(consn_src,'<!qname!>', qname, 'g');
@@ -486,15 +598,18 @@ declare
 	clr_src text;
 	peek_src text;
 begin
-	if length(qname)>32 then
+	if length(qname)>32 or qname ~ $RE$\W$RE$ then
 	   raise exception 'Name % too long (32 chars max)', qname;
 	end if;
+	--qname:=lower(qname);
 	execute 'create table ' || schname || '.qt$' || qname || '( like ' || schname || '.qt_model including all)';
+	perform mbus._create_queue_role(qname);
 	insert into mbus.queue(qname,consumers_cnt) values(qname,consumers_cnt);
 	post_src := $post_src$
         CREATE OR REPLACE FUNCTION mbus.post_<!qname!>(data hstore, headers hstore DEFAULT NULL::hstore, properties hstore DEFAULT NULL::hstore, delayed_until timestamp without time zone DEFAULT NULL::timestamp without time zone, expires timestamp without time zone DEFAULT NULL::timestamp without time zone, iid text default null)
   	RETURNS text AS
 	$BDY$
+	        select mbus._should_be_able_to_post('<!qname!>');
  		select mbus.run_trigger('<!qname!>', $1, $2, $3, $4, $5);
                 select mbus.raise_exception('Wrong iid=' || $6 || ' for queue <!qname!>') where $6 is not null and $6 not like $Q$<!qname!>.%$Q$ and $6 not like $Q$dmq.%$Q$;
  		insert into mbus.qt$<!qname!>(data, 
@@ -522,6 +637,7 @@ begin
                                ) returning iid;
 	$BDY$
   	LANGUAGE sql VOLATILE
+  	SECURITY DEFINER
   	COST 100;
 	$post_src$;
  	post_src:=regexp_replace(post_src,'<!qname!>', qname, 'g');
@@ -616,7 +732,7 @@ declare
 	tq text:=mbus.create_temporary_queue();
 begin
 	if not exists(select * from pg_catalog.pg_tables where schemaname='mbus' and tablename='qt$' || cname) then
-        	raise notice 'WARNING: source queue (%) does not exists (yet?)', src;
+        	raise notice 'WARNING: source queue (%) does not exists (yet?)', cname;
    	end if;
   	selector := case when p_selector is null or p_selector ~ '^ *$' then '1=1' else p_selector end;
   		insert into mbus.trigger(src,dst,selector) values(cname,tq,selector);
@@ -839,6 +955,7 @@ CREATE FUNCTION drop_consumer(cname text, qname text) RETURNS void
    execute 'drop function mbus.consume_' || qname || '_by_' || cname || '()';
    execute 'drop function mbus.consumen_' || qname || '_by_' || cname || '(integer)';
    execute 'drop function mbus.take_from_' || qname || '_by_' || cname || '(text)';
+   perform mbus._drop_consumer_role(cname);
    perform mbus.regenerate_functions();
  end;
 $_$;
@@ -852,6 +969,12 @@ declare
  r record;
 begin
  execute 'drop table mbus.qt$' || qname || ' cascade';
+
+ begin
+   execute 'drop role mbus_post_' || qname;
+ exception
+  when sqlstate '42704' then null;
+ end;
  for r in (select * from 
                   pg_catalog.pg_proc prc, pg_catalog.pg_namespace nsp 
                   where  prc.pronamespace=nsp.oid and nsp.nspname='mbus'
@@ -1154,6 +1277,7 @@ CREATE FUNCTION readme_rus() RETURNS text
      Сообщения получаются обычным mbus.consume(qname)      
      Временные очереди должны периодически очищаться от мусора вызовом функции
      mbus.clear_tempq()
+     Выборка (consume) из временных очередей может быть блокирующей!
 
      Удаление очередей.
      Временные очереди удалять не надо: они будут удалены автоматически после окончания сессии.
@@ -1163,13 +1287,20 @@ CREATE FUNCTION readme_rus() RETURNS text
      агрессивно очищаться (VACUUM)
 
      Триггеры
-     Для каждой очереди можно создать триггер - т.е. при поступлении сообщения в очередь
-     оно может быть скопировано в другую очередь, если селектор для триггера истинный.
-     Для чего это надо? Например, есть очень большая очередь, на которую потребовалось
-     подписаться. Создание еще одного подписчика - достаточно затратная вещь, для каждого
-     подписчика создается отдельный индекс; при большой очереди надо при создании подписчика
-     указывать параметр noindex - тогда индекс не будет создаваться, но текст запроса для
-     создания требуемого индекса будет возвращен как raise notice.
+       Для каждой очереди можно создать триггер - т.е. при поступлении сообщения в очередь
+       оно может быть скопировано в другую очередь, если селектор для триггера истинный.
+       Для чего это надо? Например, есть очень большая очередь, на которую потребовалось
+       подписаться. Создание еще одного подписчика - достаточно затратная вещь, для каждого
+       подписчика создается отдельный индекс; при большой очереди надо при создании подписчика
+       указывать параметр noindex - тогда индекс не будет создаваться, но текст запроса для
+       создания требуемого индекса будет возвращен как raise notice.
+       Триггер создается фукцией mbus.create_trigger(src_queue_name text, dst_queue_name text, selector text);
+
+     Временные подписчики
+       Временные подписчики создаются функцией mbus.create_temporary_consumer(qname text, selector text)
+       Функция возвращает имя временного подписчика
+       Подписчик существует до тех пор, пока активная текущая сессия.
+       Для удаления уставших подписчиков необходимо периодически вызывать функцию mbus.clear_tempq
 
      create_run_function(qname text)
      Генерирует функцию вида:
@@ -1317,6 +1448,10 @@ CREATE FUNCTION readme_rus() RETURNS text
         взять iid затычки, выбрать по нему затычку, выбрать все сообщения, которые в ней указаны, поменять tour на состояние "откатывается потому что...."
     4. Зафиксировать транзакцию
 
+ Безопасность и права доступа
+    Если пользователь (user) имеет роль вида mbus_post_<queue_name>, где <queue_name> - имя очереди, то он может отправлять сообщения в эту очередь
+    Если пользоваетль имеет роль mbus_consume_<queue_name>_by_<consumer_name>, где <queue_name> - имя очереди, <consumer_name> - имя подписчика,
+    то он может получать сообщения из этой очереди от имени указанного подписчика
 $TEXT$::text;
 $_$;
 
@@ -1549,3 +1684,4 @@ alter extension mbus drop sequence seq;
 alter extension mbus drop sequence qt_model_id_seq;
 alter extension mbus drop sequence consumer_id_seq;
 alter extension mbus drop sequence queue_id_seq;
+grant usage on schema mbus to public;
