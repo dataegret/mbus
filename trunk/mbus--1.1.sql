@@ -158,13 +158,13 @@ language sql;
 
 create or replace function mbus.can_consume(qname text, cname text default 'default') returns boolean as
 $code$
-   select _is_superuser() or pg_has_role(session_user,'mbus_consume_' || $1 || '_by_' || $2,'usage')::boolean;
+   select _is_superuser() or pg_has_role(session_user,'mbus_' || current_database() || '_consume_' || $1 || '_by_' || $2,'usage')::boolean;
 $code$
 language sql;
 
 create or replace function can_post(qname text) returns boolean as
 $code$
-   select _is_superuser() or pg_has_role(session_user,'mbus_post_' || $1,'usage')::boolean;
+   select _is_superuser() or pg_has_role(session_user,'mbus_' || current_database() || '_post_' || $1,'usage')::boolean;
 $code$
 language sql;
 
@@ -202,7 +202,7 @@ begin
   end if;
 
   begin
-     execute 'create role mbus_consume_' || qname || '_by_' || cname;
+     execute 'create role mbus_' || current_database() || '_consume_' || qname || '_by_' || cname;
   exception
    when sqlstate '42710' -- "role already exists
       then 
@@ -220,7 +220,7 @@ begin
   end if;
 
   begin
-    execute 'create role mbus_post_' || qname;
+    execute 'create role mbus_' || current_database() || '_post_' || qname;
   exception
    when sqlstate '42710' -- "role already exists
       then 
@@ -231,24 +231,31 @@ $code$
 language plpgsql;
 
 
-create or replace function mbus._drop_consumer_role(cname text) returns void as
+create or replace function mbus._drop_consumer_role(qname text, cname text) returns void as
 $code$
 begin
   if cname ~ $RE$\W$RE$ or length(cname)>32 then
       raise exception 'Wrong consumer name:%', cname;
   end if;
-  execute 'drop role mbus_consume_' || cname;
+  execute 'drop role mbus_' || current_database() || 'consume_' || qname || '_by_' || cname;
 end;
 $code$
 language plpgsql;
 
 create or replace function mbus._drop_queue_role(qname text) returns void as
 $code$
+declare
+ r record;
 begin
-  if cname ~ $RE$\W$RE$ or length(cname)>32 then
-      raise exception 'Wrong consumer name:%', cname;
-  end if;
-  execute 'drop role mbus_post_' || qname;
+  execute 'drop role mbus_' || current_database() || '_post_' || qname;
+
+  for r in select * from mbus.consumer c where c.qname=_drop_queue_role.qname loop
+    begin
+        execute 'drop role mbus_' || current_database() || '_consume_' || qname || '_by_' || r.name;
+    exception
+      when sqlstate '42704' then raise notice 'Role % does not exists', r.name; --role doesn't exist
+    end;
+  end loop;
 end;
 $code$
 language plpgsql;
@@ -955,7 +962,7 @@ CREATE FUNCTION drop_consumer(cname text, qname text) RETURNS void
    execute 'drop function mbus.consume_' || qname || '_by_' || cname || '()';
    execute 'drop function mbus.consumen_' || qname || '_by_' || cname || '(integer)';
    execute 'drop function mbus.take_from_' || qname || '_by_' || cname || '(text)';
-   perform mbus._drop_consumer_role(cname);
+   perform mbus._drop_consumer_role(qname, cname);
    perform mbus.regenerate_functions();
  end;
 $_$;
@@ -970,11 +977,7 @@ declare
 begin
  execute 'drop table mbus.qt$' || qname || ' cascade';
 
- begin
-   execute 'drop role mbus_post_' || qname;
- exception
-  when sqlstate '42704' then null;
- end;
+ perform mbus._drop_queue_role(qname);
  for r in (select * from 
                   pg_catalog.pg_proc prc, pg_catalog.pg_namespace nsp 
                   where  prc.pronamespace=nsp.oid and nsp.nspname='mbus'
@@ -1014,7 +1017,6 @@ begin
     execute 'drop function mbus.build_' || qname || '_record_consumer_list(mbus.qt_model)';
   exception when others then null;
   end;
-  
   perform mbus.regenerate_functions();  
 end;
 $_X$;
@@ -1449,9 +1451,10 @@ CREATE FUNCTION readme_rus() RETURNS text
     4. Зафиксировать транзакцию
 
  Безопасность и права доступа
-    Если пользователь (user) имеет роль вида mbus_post_<queue_name>, где <queue_name> - имя очереди, то он может отправлять сообщения в эту очередь
-    Если пользоваетль имеет роль mbus_consume_<queue_name>_by_<consumer_name>, где <queue_name> - имя очереди, <consumer_name> - имя подписчика,
-    то он может получать сообщения из этой очереди от имени указанного подписчика
+    Если пользователь (user) имеет роль вида mbus_<dbname>_post_<queue_name>, где <dbname> - имя базы, <queue_name> - имя очереди, то он 
+    может отправлять сообщения в эту очередь.
+    Если пользоваетль имеет роль mbus_<dbname>_consume_<queue_name>_by_<consumer_name>, где <queue_name> - имя очереди, <consumer_name> - имя подписчика,
+    то он может получать сообщения из этой очереди от имени указанного подписчика.
 $TEXT$::text;
 $_$;
 
@@ -1476,6 +1479,12 @@ begin
    msg_exists_qry := msg_exists_qry || 'when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then exists(select * from mbus.qt$' || r.qname || ' q where q.iid=$1 and not mbus.build_' || r.qname ||'_record_consumer_list(row(q.*)::mbus.qt_model) <@ q.received)'||chr(10);
    peek_qry:= peek_qry || 'when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then (select row(q.*)::mbus.qt_model from mbus.qt$' || r.qname || ' q where q.iid=$1 )'||chr(10);
    take_qry:= take_qry || '        when msgiid like $LIKE$' || lower(r.qname) || '.%$LIKE$ then delete from mbus.qt$' || r.qname || ' q where q.iid=$1 returning (q.*) into rv;'||chr(10);
+   --create roles
+   begin
+     execute 'create role mbus_' || current_database() || '_post_' || r.qname;
+   exception
+    when sqlstate '42710' then null; --already exists
+   end;
  end loop;
 
   --create functions for tests for visibility
@@ -1590,6 +1599,12 @@ end if;
    end if;
    consume_qry:=consume_qry || $$ when '$$ || lower(r2.name) || $$' then return query select * from mbus.consume_$$ || r2.qname || '_by_' || r2.name ||'(); return;';
    oldqname=r2.qname;
+   --create roles
+   begin
+     execute 'create role mbus_' || current_database() || '_consume_' || r2.qname || '_by_' || r2.name;
+   exception
+    when sqlstate '42710' then null; --already exists
+   end;
  end loop;
 
  if consume_qry<>'' then
