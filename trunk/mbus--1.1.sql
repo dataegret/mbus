@@ -158,13 +158,13 @@ language sql;
 
 create or replace function mbus.can_consume(qname text, cname text default 'default') returns boolean as
 $code$
-   select _is_superuser() or pg_has_role(session_user,'mbus_' || current_database() || '_consume_' || $1 || '_by_' || $2,'usage')::boolean;
+   select mbus._is_superuser() or pg_has_role(session_user,'mbus_' || current_database() || '_consume_' || $1 || '_by_' || $2,'usage')::boolean;
 $code$
 language sql;
 
 create or replace function can_post(qname text) returns boolean as
 $code$
-   select _is_superuser() or pg_has_role(session_user,'mbus_' || current_database() || '_post_' || $1,'usage')::boolean;
+   select mbus._is_superuser() or pg_has_role(session_user,'mbus_' || current_database() || '_post_' || $1,'usage')::boolean;
 $code$
 language sql;
 
@@ -172,7 +172,7 @@ language sql;
 create or replace function mbus._should_be_able_to_consume(qname text, cname text default 'default') returns void as
 $code$
 begin
-  if not _is_superuser() and not mbus.can_consume(qname, cname) then
+  if not mbus._is_superuser() and not mbus.can_consume(qname, cname) then
     raise exception 'Access denied';
   end if;
 end;
@@ -182,7 +182,7 @@ language plpgsql;
 create or replace function mbus._should_be_able_to_post(qname text) returns void as
 $code$
 begin
-  if not _is_superuser() and not mbus.can_post(qname) then
+  if not mbus._is_superuser() and not mbus.can_post(qname) then
     raise exception 'Access denied';
   end if;
 end;
