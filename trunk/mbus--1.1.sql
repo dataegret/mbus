@@ -381,6 +381,7 @@ CREATE FUNCTION create_consumer(cname text, qname text, p_selector text DEFAULT 
 RETURNS void
 LANGUAGE plpgsql
 AS $_$
+<<code>>
 declare
 	c_id integer;
 	cons_src text;
@@ -396,7 +397,7 @@ begin
 	    raise exception 'Wrong queue name:%', create_consumer.qname;
 	end if;
 
-	if exists(select * from mbus.consumer q where q.qname=create_consumer.qname and q.name=create_consumer.cname and q.selector is distinct from p_selector) then
+	if exists(select * from mbus.consumer q where q.qname=create_consumer.qname and q.name=create_consumer.cname and q.selector is distinct from code.selector) then
 	    raise exception 'Consumer with identical name (%) and different selector already exists!', cname;
 	end if;
  	
@@ -637,7 +638,7 @@ begin
 	if not exists(select * from mbus.queue q where q.qname=create_queue.qname) then
   		execute 'create table ' || schname || '.qt$' || qname || '( like ' || schname || '.qt_model including all)';
 		perform mbus._create_queue_role(qname);
-		insert into mbus.queue(qname,consumers_cnt, is_roles_security_model) values(qname,consumers_cnt, is_roles_security_model);
+		insert into mbus.queue(qname,consumers_cnt, is_roles_security_model) values(qname,consumers_cnt, create_queue.is_roles_security_model);
 		is_clean_creation := true;
 	end if;
 	post_src := $post_src$
@@ -684,7 +685,7 @@ begin
 	                                   case when is_roles_security_model then $S$select mbus._should_be_able_to_post('$S$ || qname || $S$');$S$ else '--' end
 	                        );
 	post_src:=regexp_replace(post_src,'<!SECURITY_DEFINER!>',
-	                                   case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp set' else '' end
+	                                   case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp ' else '' end
 	                        );
 
  	execute post_src;
@@ -722,7 +723,7 @@ begin
  	peek_src:=regexp_replace(peek_src,'<!qname!>', qname, 'g');
  	execute peek_src;
  
- 	perform mbus.create_consumer('default',qname, null, not is_clean_creation);
+ 	perform mbus.create_consumer(cname:='default',qname:=qname, noindex:=not is_clean_creation);
  	perform mbus.regenerate_functions(false); 
 end; 
 $_$;
@@ -1219,12 +1220,15 @@ CREATE FUNCTION readme_rus() RETURNS text
  Payload'ом очереди является значение hstore (так что тип hstore должен быть установлен в базе)
 
  Очередь создается функцией
-  mbus.create_queue(qname, ncons)
+  mbus.create_queue(qname, ncons, is_roles_security_model default false)
   где
   qname - имя очереди. Допустимы a-z (НЕ A-Z!), _, 0-9
   ncons - число одновременно доступных частей. Разумные значения - от 2 до 128-256
   больше ставить можно, но тогда будут слишком большие задержки на перебор всех частей
   Если указанная очередь уже существует, то будут пересозданы функции получения и отправки сообщений.
+  Если параметр is_roles_security_model установлен, то право на отправку сообщений в очередь
+  получат только те пользователи, у которых есть роль mbus_<dbname>_post_<qname>, а на получение
+  обладатели роли mbus_<dbname>_consume_<queue_name>_by_<consumer_name>.
  
   Теперь в очередь можно помещать сообщения:
   select mbus.post_<qname>(data hstore, 
