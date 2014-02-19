@@ -412,8 +412,6 @@ begin
  		r record;
  		gotrecord boolean:=false;
 	begin
- 		set local enable_seqscan=off;
-
  		perform mbus._should_be_able_to_consume('<!qname!>', '<!cname!>');
 
   		if version() like 'PostgreSQL 9.0%' then
@@ -461,6 +459,8 @@ begin
 	$DDD$
 	LANGUAGE plpgsql VOLATILE
 	SECURITY DEFINER
+	SET search_path = mbus, pg_temp
+	SET enable_seqscan = off
 	$CONS_SRC$; 
 
 	cons_src:=regexp_replace(cons_src,'<!qname!>', qname, 'g');
@@ -549,6 +549,8 @@ end;
 $DDD$
 LANGUAGE plpgsql VOLATILE
 SECURITY DEFINER
+SET search_path = mbus, pg_temp
+SET enable_seqscan = off
 $CONSN_SRC$; 
 
  consn_src:=regexp_replace(consn_src,'<!qname!>', qname, 'g');
@@ -645,6 +647,8 @@ begin
 	$BDY$
   	LANGUAGE sql VOLATILE
   	SECURITY DEFINER
+	SET search_path = mbus, pg_temp
+	SET enable_seqscan = off
   	COST 100;
 	$post_src$;
  	post_src:=regexp_replace(post_src,'<!qname!>', qname, 'g');
@@ -832,6 +836,7 @@ begin
 	end;
 	$thecode$
 	security definer
+	SET search_path = mbus, pg_temp
 	language plpgsql;
 
 	create trigger trg_%<qname>  instead of insert on %<qname>_q for each row execute procedure trg_post_%<qname>();   
@@ -857,6 +862,7 @@ begin
 	end;
 	$thecode$
 	security definer
+	SET search_path = mbus, pg_temp
 	language plpgsql;
 
 	create trigger trg_%<qname>  instead of insert on %<sname>%<viewname> for each row execute procedure %<sname>trg_post_%<viewname>();   
@@ -880,6 +886,7 @@ begin
 	end;
 	$thecode$
 	security definer
+	SET search_path = mbus, pg_temp
 	language plpgsql;
 
 	create trigger trg_%<qname>  instead of insert on %<sname>%<viewname> for each row execute procedure %<sname>trg_post_%<viewname>();   
@@ -904,6 +911,7 @@ begin
 	end;
 	$thecode$
 	security definer
+	SET search_path = mbus, pg_temp
 	language plpgsql;
 
 	create trigger trg_%<qname>  instead of insert on %<sname>%<viewname> for each row execute procedure %<sname>trg_post_%<viewname>();   

@@ -1,8 +1,10 @@
-SELECT pg_catalog.pg_extension_config_dump('qt_model', '');
-SELECT pg_catalog.pg_extension_config_dump('consumer', '');
-SELECT pg_catalog.pg_extension_config_dump('dmq', '');
-SELECT pg_catalog.pg_extension_config_dump('queue', '');
-SELECT pg_catalog.pg_extension_config_dump('trigger', '');
+update pg_catalog.pg_extension set extconfig=t.config, extcondition=t.condition
+  from (
+    select array_agg((schemaname || '.' || tablename)::regclass::oid) as config,
+           array_agg(''::text) as condition
+      from pg_catalog.pg_tables where schemaname='mbus' and tablename in ('qt_model','consumer','dmq','queue','trigger')
+    ) as t
+where extname='mbus';
 
 alter extension mbus drop sequence seq;
 alter extension mbus drop sequence qt_model_id_seq;
