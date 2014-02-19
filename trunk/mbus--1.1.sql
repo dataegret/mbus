@@ -354,10 +354,7 @@ begin
         	return query select * from mbus.consume_temp(qname);
             	return;
         end if;
-        case lower(qname)
-        	when 'work' then case lower(cname)  when 'default' then return query select * from mbus.consume_work_by_default(); return; when 'def2' then return query select * from mbus.consume_work_by_def2(); return; else raise exception $$unknown consumer:%$$, consumer; end case;
-
-        end case;
+        raise exception 'No queues were defined';
 end;
 $_$;
 
@@ -397,6 +394,10 @@ begin
 	selector := case when p_selector is null or p_selector ~ '^ *$' then '1=1' else p_selector end;
         if not exists(select * from mbus.queue q where q.qname=create_consumer.qname) then
 	    raise exception 'Wrong queue name:%', create_consumer.qname;
+	end if;
+
+	if exists(select * from mbus.consumer q where q.qname=create_consumer.qname and q.name=create_consumer.cname and q.selector is distinct from p_selector) then
+	    raise exception 'Consumer with identical name (%) and different selector already exists!', cname;
 	end if;
  	
         if not exists(select * from mbus.consumer q where q.qname=create_consumer.qname and q.name=create_consumer.cname) then
@@ -1223,6 +1224,7 @@ CREATE FUNCTION readme_rus() RETURNS text
   qname - имя очереди. Допустимы a-z (НЕ A-Z!), _, 0-9
   ncons - число одновременно доступных частей. Разумные значения - от 2 до 128-256
   больше ставить можно, но тогда будут слишком большие задержки на перебор всех частей
+  Если указанная очередь уже существует, то будут пересозданы функции получения и отправки сообщений.
  
   Теперь в очередь можно помещать сообщения:
   select mbus.post_<qname>(data hstore, 
