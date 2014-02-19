@@ -1528,7 +1528,6 @@ begin
         begin
           execute 'drop function mbus.post(text, hstore, hstore, hstore, timestamp, timestamp)';
           execute 'create or replace function mbus.is_msg_exists(msgiid text) returns boolean $code$ select false; $code$ language sql';
-        exception when others then null;
         end;
  else
         execute $FUNC$
@@ -1620,10 +1619,7 @@ end if;
  end if;
 
  if consume_qry='' then 
-        begin
-          execute 'drop function mbus.consume(text, text)';
-        exception when others then null;
-        end;
+        execute 'drop function mbus.consume(text, text)';
  else 
         execute $FUNC$
         create or replace function mbus.consume(qname text, cname text default 'default') returns setof mbus.qt_model as
