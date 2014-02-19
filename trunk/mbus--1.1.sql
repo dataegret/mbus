@@ -421,7 +421,7 @@ begin
  		r record;
  		gotrecord boolean:=false;
 	begin
- 		<!should_be_able_to_consume!>;
+ 		<!should_be_able_to_consume!>
 
   		if version() like 'PostgreSQL 9.0%' then
      			for r in 
@@ -481,7 +481,7 @@ begin
 
 	is_roles_security_model:=(select q.is_roles_security_model from mbus.queue q where q.qname=create_consumer.qname);
 	cons_src:=regexp_replace(cons_src,'<!should_be_able_to_consume!>',
-	                                   case when is_roles_security_model then $S$select mbus._should_be_able_to_consume('$S$ || qname || $S$','$S$ || cname || $S$');$S$ else '--' end
+	                                   case when is_roles_security_model then $S$perform mbus._should_be_able_to_consume('$S$ || qname || $S$','$S$ || cname || $S$');$S$ else '--' end
 	                        );
 	cons_src:=regexp_replace(cons_src,'<!SECURITY_DEFINER!>',
 	                                   case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp ' else '' end
@@ -576,7 +576,7 @@ $CONSN_SRC$;
 
  is_roles_security_model:=(select q.is_roles_security_model from mbus.queue q where q.qname=create_consumer.qname);
  consn_src:=regexp_replace(consn_src,'<!should_be_able_to_consume!>',
-                                    case when is_roles_security_model then $S$select mbus._should_be_able_to_consume('$S$ || qname || $S$','$S$ || cname || $S$');$S$ else '--' end
+                                    case when is_roles_security_model then $S$perform mbus._should_be_able_to_consume('$S$ || qname || $S$','$S$ || cname || $S$');$S$ else '--' end
                          );
  consn_src:=regexp_replace(consn_src,'<!SECURITY_DEFINER!>',
                                     case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp ' else '' end
@@ -687,7 +687,8 @@ begin
 	post_src:=regexp_replace(post_src,'<!SECURITY_DEFINER!>',
 	                                   case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp ' else '' end
 	                        );
-
+        execute 'drop function if exists mbus.post_' || qname || '(hstore, hstore, hstore,timestamp without time zone,timestamp without time zone)';
+        execute 'drop function if exists mbus.post_' || qname || '(hstore, hstore, hstore,timestamp without time zone,timestamp without time zone, text)';
  	execute post_src;
 
  	clr_src:=$CLR_SRC$
@@ -1040,7 +1041,8 @@ begin
   ) loop
     case 
       when r.proname like 'post_%' then
-       execute 'drop function mbus.' || r.proname || '(hstore, hstore, hstore, timestamp without time zone, timestamp without time zone, text)';
+       execute 'drop function if exists mbus.' || r.proname || '(hstore, hstore, hstore, timestamp without time zone, timestamp without time zone, text)';
+       execute 'drop function if exists mbus.' || r.proname || '(hstore, hstore, hstore, timestamp without time zone, timestamp without time zone)';
       when r.proname like 'consumen_%' then
        execute 'drop function mbus.' || r.proname || '(integer)';
       when r.proname like 'peek_%' then
@@ -1566,21 +1568,11 @@ begin
       $RCL$;
     end loop;
 
+  execute 'drop function if exists mbus.post(text, hstore, hstore, hstore, timestamp, timestamp)';
+  execute 'drop function if exists mbus.post(text, hstore, hstore, hstore, timestamp, timestamp, text)';
  
  if post_qry='' then
         begin
-          begin
-            execute 'drop function mbus.post(text, hstore, hstore, hstore, timestamp, timestamp)';
-          exception
-           when sqlstate '42883' then null; --already exists
-          end;
-
-          begin
-            execute 'drop function mbus.post(text, hstore, hstore, hstore, timestamp, timestamp, text)';
-          exception
-           when sqlstate '42883' then null; --already exists
-          end;
-
           execute 'create or replace function mbus.is_msg_exists(msgiid text) returns boolean as $code$ select false; $code$ language sql';
         end;
  else
