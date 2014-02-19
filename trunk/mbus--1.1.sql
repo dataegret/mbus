@@ -1631,6 +1631,7 @@ end if;
           end if;
          case lower(qname)
         $FUNC$ || consume_qry || $FUNC$
+         else raise exception 'Queue % does not exists', qname;
          end case;
         end;
         $QQ$
