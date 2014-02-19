@@ -399,8 +399,10 @@ begin
 	    raise exception 'Wrong queue name:%', create_consumer.qname;
 	end if;
  	
-        if not exists(select * from mbus.consumer q where q.qname=create_consumer.qname and q.cname=create_consumer.cname) then
-    		insert into mbus.consumer(name, qname, selector, added) values(cname, qname, selector, now()::timestamp without time zone) returning id into c_id;
+        if not exists(select * from mbus.consumer q where q.qname=create_consumer.qname and q.name=create_consumer.cname) then
+    	   insert into mbus.consumer(name, qname, selector, added) values(cname, qname, selector, now()::timestamp without time zone) returning id into c_id;
+    	else
+    	   select id, added into c_id, nowtime from mbus.consumer c where c.name=cname and c.qname=create_consumer.qname;
     	end if;
  	perform mbus._create_consumer_role(qname, cname);
 
@@ -625,15 +627,17 @@ declare
 	clr_src text;
 	peek_src text;
 	is_roles_security_model boolean;
+	is_clean_creation boolean := false;
 begin
 	if length(qname)>32 or qname ~ $RE$\W$RE$ then
 	   raise exception 'Name % too long (32 chars max)', qname;
 	end if;
 	--qname:=lower(qname);
-	if not esists(select * from mbus.queue q where q.name=create_queue.qname) then
+	if not exists(select * from mbus.queue q where q.qname=create_queue.qname) then
   		execute 'create table ' || schname || '.qt$' || qname || '( like ' || schname || '.qt_model including all)';
 		perform mbus._create_queue_role(qname);
 		insert into mbus.queue(qname,consumers_cnt, is_roles_security_model) values(qname,consumers_cnt, is_roles_security_model);
+		is_clean_creation := true;
 	end if;
 	post_src := $post_src$
         CREATE OR REPLACE FUNCTION mbus.post_<!qname!>(data hstore, headers hstore DEFAULT NULL::hstore, properties hstore DEFAULT NULL::hstore, delayed_until timestamp without time zone DEFAULT NULL::timestamp without time zone, expires timestamp without time zone DEFAULT NULL::timestamp without time zone, iid text default null)
@@ -717,7 +721,7 @@ begin
  	peek_src:=regexp_replace(peek_src,'<!qname!>', qname, 'g');
  	execute peek_src;
  
- 	perform mbus.create_consumer('default',qname);
+ 	perform mbus.create_consumer('default',qname, null, not is_clean_creation);
  	perform mbus.regenerate_functions(false); 
 end; 
 $_$;
@@ -1498,7 +1502,7 @@ $_$;
 
 
 
-CREATE FUNCTION regenerate_functions(is_full_regeneration default true) RETURNS void
+CREATE FUNCTION regenerate_functions(is_full_regeneration boolean default true) RETURNS void
     LANGUAGE plpgsql
     AS $_X$
 declare
@@ -1562,16 +1566,16 @@ begin
           begin
             execute 'drop function mbus.post(text, hstore, hstore, hstore, timestamp, timestamp)';
           exception
-           when sqlstate '42710' then null; --already exists
+           when sqlstate '42883' then null; --already exists
           end;
 
           begin
             execute 'drop function mbus.post(text, hstore, hstore, hstore, timestamp, timestamp, text)';
           exception
-           when sqlstate '42710' then null; --already exists
+           when sqlstate '42883' then null; --already exists
           end;
 
-          execute 'create or replace function mbus.is_msg_exists(msgiid text) returns boolean $code$ select false; $code$ language sql';
+          execute 'create or replace function mbus.is_msg_exists(msgiid text) returns boolean as $code$ select false; $code$ language sql';
         end;
  else
         execute $FUNC$
@@ -1657,7 +1661,7 @@ end if;
     when sqlstate '42710' then null; --already exists
    end;
    if is_full_regeneration then
-      perform mbus.create_consumer(r2.name, r2.qname, r2.selector);
+      perform mbus.create_consumer(r2.name, r2.qname, r2.selector, true);
    end if;
  end loop;
 
@@ -1666,7 +1670,7 @@ end if;
  end if;
 
  if consume_qry='' then 
-        execute 'drop function mbus.consume(text, text)';
+        execute $STR$create or replace function mbus.consume(qname text, cname text default 'default') returns setof mbus.qt_model as $code$ select * from mbus.qt_model where 0=1; $code$ language sql $STR$;
  else 
         execute $FUNC$
         create or replace function mbus.consume(qname text, cname text default 'default') returns setof mbus.qt_model as
