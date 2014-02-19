@@ -1670,7 +1670,7 @@ end if;
  end if;
 
  if consume_qry='' then 
-        execute $STR$create or replace function mbus.consume(qname text, cname text default 'default') returns setof mbus.qt_model as $code$ select * from mbus.qt_model where 0=1; $code$ language sql $STR$;
+        execute $STR$create or replace function mbus.consume(qname text, cname text default 'default') returns setof mbus.qt_model as $code$ select mbus.raise_exception('No queues were defined'); select * from mbus.qt_model;$code$ language sql $STR$;
  else 
         execute $FUNC$
         create or replace function mbus.consume(qname text, cname text default 'default') returns setof mbus.qt_model as
