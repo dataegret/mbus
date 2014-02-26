@@ -1,0 +1,26 @@
+﻿ Безопасность и права доступа
+ В предыдущих версиях неявно предполагалось, что все функции выполняются от суперпользователя.
+ В настоящей версии это сохранено - по умолчанию поведение не изменилось. Однако у функции
+ create_queue появился третий параметр: 
+   create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean default null) 
+ Если этот параметр (то есть is_roles_security_model) истинный, то 
+  1. Функции отправки и получения создаются как security definer
+  2. При отправке и получении сообщения проверяется наличие у отправляющего соответствующих ролей.
+  Для отправки сообщения в очередь у пользователя должна быть роль вида
+    mbus_<dbname>_post_<queue_name>
+  где <dbname> - имя базы, в которой находится очередь
+      <queue_name> - имя очереди, в которую отправляется сообщение.
+  
+  Для получения сообщения у пользователя должна быть роль вида
+    mbus_<dbname>_consume_<queue_name>_by_<consumer_name>
+  где <dbname> и <queue_name> имеют такой же смысл, как и выше, а <consumer_name> - имя получателя;
+  то есть пользователю дается роль получать сообщения из такой-то очереди для такого-то получателя.
+  По умолчанию для каждой очередью вместе с ней самой создается и получатель default.
+
+  Пример:
+    select mbus.create_queue(qname:='mailq', consumer_cnt:=128, is_roles_security_model:=true);
+    create role mbus_work_post_mailq;
+    grant mbus_work_post_mailq to mail_sender;
+    ...
+    revoke mbus_work_post_mailq from mail_sender;
+
