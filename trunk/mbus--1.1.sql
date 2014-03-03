@@ -1108,25 +1108,37 @@ $_$;
 
 
 
-CREATE FUNCTION dyn_consume(qname text, selector text DEFAULT '(1=1)'::text, cname text DEFAULT 'default'::text) RETURNS SETOF qt_model
-    LANGUAGE plpgsql
-    AS $_$
+CREATE OR REPLACE FUNCTION mbus.dyn_consume(qname text, selector text DEFAULT '(1=1)'::text, cname text DEFAULT 'default'::text)
+  RETURNS SETOF mbus.qt_model AS
+$BODY$
 declare
  rv mbus.qt_model;
  consid integer;
  consadded timestamp;
  hash text:='_'||md5(coalesce(selector,''));
+ is_rsm boolean :=false;
 begin
- set local enable_seqscan=off;
  if selector is null then
    selector:='(1=1)';
  end if;
+ 
  select id, added into consid, consadded from mbus.consumer c where c.qname=dyn_consume.qname and c.name=dyn_consume.cname;
-  begin
+ if not found then
+    raise exception 'Consumer % does not exists!', cname;
+ end if;
+
+ if (select is_roles_security_model from mbus.queue q where q.qname=dyn_consume.qname) then
+  	perform mbus._should_be_able_to_consume(qname,cname);
+ end if;
+ 
+ begin
    execute 'execute /**/ mbus_dyn_consume_'||qname||hash||'('||consid||','''||consadded||''')' into rv;
   exception
     when sqlstate '26000' then
-      execute 
+      if not exists(select * from mbus.queue q where q.qname=dyn_consume.qname) then
+        raise exception 'Queue % does not exists!', qname;
+      end if;      
+      execute       
       $QRY$prepare mbus_dyn_consume_$QRY$ || qname||hash || $QRY$(integer, timestamp) as
         select * 
           from mbus.qt$$QRY$ || qname ||$QRY$ t
@@ -1164,7 +1176,11 @@ begin
     return;
  end if; 
 end;
-$_$;
+$BODY$
+  LANGUAGE plpgsql VOLATILE
+  COST 100
+  ROWS 1000
+  set enable_seqscan=off;
 
 
 
