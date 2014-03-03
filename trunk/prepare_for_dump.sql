@@ -14,7 +14,7 @@ declare
  matches text[];
  begin
      for r in (select substring(table_name from $RE$qt\$(.*)$RE$) as qname from information_schema.tables where table_schema='mbus' and table_name like 'qt$%') loop
-      --raise notice 'queue=%', r.qname;
+      -- raise notice 'queue=%', r.qname;
       if not exists(select * from mbus.queue q where q.qname=r.qname) then
         insert into mbus.qname(qname, consumers_cnt) values(r.qname,128);
       end if;
@@ -29,9 +29,9 @@ declare
                                  and \s+ t.delayed_until<now\(\) \s+ and \s+ \((.*)\)=true \s+ 
                                  and \s+ added \s+ >\s+ '(\d\d\d\d-\d\d-\d\d \s \d\d:\d\d:\d\d\.\d\d\d) .*
                                  .* limit \s+ 1 \s+ for \s+ update; $RE$,'x');
-                  --raise notice ' id=%', matches[1];
-                  --raise notice ' selector=%', matches[2];
-                  --raise notice ' added=%', matches[3];
+                  -- raise notice ' id=%', matches[1];
+                  -- raise notice ' selector=%', matches[2];
+                  -- raise notice ' added=%', matches[3];
                   if not exists(select * from mbus.consumer c where c.qname=r.qname and c.name=cons.cname) then
                     insert into mbus.consumer(id, name, qname, selector,added) values(matches[1]::integer, cons.cname, r.qname, matches[2], matches[3]::timestamp);
                   end if;
