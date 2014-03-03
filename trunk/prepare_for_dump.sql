@@ -16,7 +16,7 @@ declare
      for r in (select substring(table_name from $RE$qt\$(.*)$RE$) as qname from information_schema.tables where table_schema='mbus' and table_name like 'qt$%') loop
       -- raise notice 'queue=%', r.qname;
       if not exists(select * from mbus.queue q where q.qname=r.qname) then
-        insert into mbus.qname(qname, consumers_cnt) values(r.qname,128);
+        insert into mbus.queue(qname, consumers_cnt) values(r.qname,128);
       end if;
       for cons in (select routine_definition as def, substring(ro.routine_name from '_by_(.*)') as cname 
                      from information_schema.routines ro 
