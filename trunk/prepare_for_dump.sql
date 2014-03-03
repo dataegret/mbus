@@ -40,7 +40,7 @@ declare
      perform setval('mbus.queue_id_seq', (select max(id) from mbus.queue));
      perform setval('mbus.consumer_id_seq', (select max(id) from mbus.consumer));
     end;
-$code$ 
+$code$;
 
 
 alter extension mbus drop sequence mbus.seq;
