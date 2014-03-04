@@ -484,7 +484,7 @@ begin
 	                                   case when is_roles_security_model then $S$perform mbus._should_be_able_to_consume('$S$ || qname || $S$','$S$ || cname || $S$');$S$ else '--' end
 	                        );
 	cons_src:=regexp_replace(cons_src,'<!SECURITY_DEFINER!>',
-	                                   case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp ' else '' end
+	                                   case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp, public ' else '' end
 	                        );
 	execute cons_src;
 
@@ -579,7 +579,7 @@ $CONSN_SRC$;
                                     case when is_roles_security_model then $S$perform mbus._should_be_able_to_consume('$S$ || qname || $S$','$S$ || cname || $S$');$S$ else '--' end
                          );
  consn_src:=regexp_replace(consn_src,'<!SECURITY_DEFINER!>',
-                                    case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp ' else '' end
+                                    case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp, public ' else '' end
                          );
 
  execute consn_src;
@@ -685,7 +685,7 @@ begin
 	                                   case when is_roles_security_model then $S$select mbus._should_be_able_to_post('$S$ || qname || $S$');$S$ else '--' end
 	                        );
 	post_src:=regexp_replace(post_src,'<!SECURITY_DEFINER!>',
-	                                   case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp ' else '' end
+	                                   case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp, public ' else '' end
 	                        );
         execute 'drop function if exists mbus.post_' || qname || '(hstore, hstore, hstore,timestamp without time zone,timestamp without time zone)';
         execute 'drop function if exists mbus.post_' || qname || '(hstore, hstore, hstore,timestamp without time zone,timestamp without time zone, text)';
@@ -873,7 +873,7 @@ begin
 	end;
 	$thecode$
 	security definer
-	SET search_path = mbus, pg_temp
+	SET search_path = mbus, pg_temp, public
 	language plpgsql;
 
 	create trigger trg_%<qname>  instead of insert on %<qname>_q for each row execute procedure trg_post_%<qname>();   
@@ -899,7 +899,7 @@ begin
 	end;
 	$thecode$
 	security definer
-	SET search_path = mbus, pg_temp
+	SET search_path = mbus, pg_temp, public
 	language plpgsql;
 
 	create trigger trg_%<qname>  instead of insert on %<sname>%<viewname> for each row execute procedure %<sname>trg_post_%<viewname>();   
@@ -923,7 +923,7 @@ begin
 	end;
 	$thecode$
 	security definer
-	SET search_path = mbus, pg_temp
+	SET search_path = mbus, pg_temp, public
 	language plpgsql;
 
 	create trigger trg_%<qname>  instead of insert on %<sname>%<viewname> for each row execute procedure %<sname>trg_post_%<viewname>();   
@@ -948,7 +948,7 @@ begin
 	end;
 	$thecode$
 	security definer
-	SET search_path = mbus, pg_temp
+	SET search_path = mbus, pg_temp, public
 	language plpgsql;
 
 	create trigger trg_%<qname>  instead of insert on %<sname>%<viewname> for each row execute procedure %<sname>trg_post_%<viewname>();   
