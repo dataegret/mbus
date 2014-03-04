@@ -1705,7 +1705,8 @@ end if;
  end if;
  
 end;
-$_X$;
+$_X$
+set search_path = mbus, pg_temp, public;
 
 
 
