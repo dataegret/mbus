@@ -42,9 +42,32 @@ declare
     end;
 $code$;
 
+do $code$
+begin
+  begin
+   alter extension mbus drop sequence mbus.seq;
+  exception
+   when sqlstate '55000' then null;
+  end;
 
-alter extension mbus drop sequence mbus.seq;
-alter extension mbus drop sequence mbus.qt_model_id_seq;
-alter extension mbus drop sequence mbus.consumer_id_seq;
-alter extension mbus drop sequence mbus.queue_id_seq;
-grant usage on schema mbus to public;
+  begin
+   alter extension mbus drop sequence mbus.qt_model_id_seq;
+  exception
+   when sqlstate '55000' then null;
+  end;
+
+  begin
+   alter extension mbus drop sequence mbus.consumer_id_seq;
+  exception
+   when sqlstate '55000' then null;
+  end;
+
+  begin
+   alter extension mbus drop sequence mbus.queue_id_seq;
+  exception
+   when sqlstate '55000' then null;
+  end;
+
+  grant usage on schema mbus to public;
+end;
+$code$;
