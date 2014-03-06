@@ -238,7 +238,7 @@ begin
   if cname ~ $RE$\W$RE$ or length(cname)>32 then
       raise exception 'Wrong consumer name:%', cname;
   end if;
-  execute 'drop role mbus_' || current_database() || 'consume_' || qname || '_by_' || cname;
+  execute 'drop role mbus_' || current_database() || '_consume_' || qname || '_by_' || cname;
 end;
 $code$
 language plpgsql;
@@ -321,7 +321,9 @@ select
 $BODY$
   LANGUAGE sql IMMUTABLE
   COST 100;
---'
+
+--' - single quote here is just for correct text highlight of colororer
+
 create or replace function raise_exception(exc text) returns void as
 $code$
  begin
@@ -1213,7 +1215,8 @@ $_$;
 
 create function get_iid(qname text) returns text as
 $code$
-   select $1 || nextval('mbus.seq');
+   select $1 || '.' || nextval('mbus.seq') 
+     || case when not exists(select * from mbus.queue q where q.qname=get_iid.qname) then mbus.raise_exception('No such queue: ' || qname) else '' end;
 $code$
 language sql;
 
