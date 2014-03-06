@@ -70,15 +70,17 @@ public class MessageProducer4MBUS implements Callable<Integer>{
                     conn.commit();
             }
             conn.commit();
+            conn.close();
         }catch(InterruptedException | SQLException ex){
             Thread.currentThread().interrupt();
             exc = ex;
             return 0;
         }finally{
             try { 
-                if(Thread.currentThread().isInterrupted())
+                if(Thread.currentThread().isInterrupted()){
                     conn.rollback(); 
-                conn.close();
+                    //conn.close();
+                }
             } catch(SQLException e2){ 
                 e2.initCause(exc);
                 throw new RuntimeException(e2);

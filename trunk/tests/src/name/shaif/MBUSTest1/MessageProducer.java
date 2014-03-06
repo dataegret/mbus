@@ -8,6 +8,7 @@ package name.shaif.MBUSTest1;
 
 import java.math.BigDecimal;
 import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Callable;
 
@@ -46,10 +47,18 @@ public class MessageProducer implements Callable<Integer> {
                 messagesToSend--;
                 messagesSent++;
             }
+            conn.close();
         }catch(InterruptedException e){
             //do cleanup
+            try{
+                conn.close();
+            }catch(SQLException ee){
+                throw new RuntimeException("Cannot close connection", ee);
+            }
             Thread.currentThread().interrupted();
             return messagesSent;
+        }catch(Exception e){
+            throw new RuntimeException(e.getMessage(),e);
         }
         return messagesSent;
     }

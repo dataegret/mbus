@@ -69,7 +69,11 @@ public class MessageConsumer4MBUS implements Callable{
                 }
             }            
         }catch(InterruptedException  e){
-            try{ pollQueueSth.close(); } catch(SQLException e2){ throw new RuntimeException("Cannot close statement:"+e.getMessage(), e2);}
+            try{ 
+                pollQueueSth.close(); //conn.close();
+            } catch(SQLException e2){ 
+                throw new RuntimeException("Cannot close statement:"+e.getMessage(), e2);
+            }
             return getMessagesReceived();
         }catch(SQLException e){            
             try{

@@ -18,8 +18,8 @@ import java.util.concurrent.*;
  * Main class for test mbus for correctness and performance
  */
 public class Main{
-    static int TOTAL_PRODUCERS = 7;
-    static int TOTAL_CONSUMERS = 11;
+    static int TOTAL_PRODUCERS = 20;
+    static int TOTAL_CONSUMERS = 7;
     static int TOTAL_TO_SEND = 1000;
 
     public static int getTOTAL_TO_SEND() {
@@ -55,7 +55,7 @@ public class Main{
         return JDBC_PASSWORD;
     }
     static final String NOT_SELECTOR = "not(" + SELECTOR + ")";
-    static String JDBC_URL = "jdbc:postgresql://localhost:5433/dst";
+    static String JDBC_URL = "jdbc:postgresql://localhost:5433/dst?prepareThreshold=1";
     static String JDBC_USER = "postgres";
     static String JDBC_PASSWORD = "root";
     
@@ -69,6 +69,8 @@ public class Main{
                     throw new WrongCommandLineArgument("Wrong switch:" + s);
                 key = s;
                 first = false;
+                if(s.equals("-help"))
+                    cmdLine.put(s,"-help");
             }else{
                 assert key!=null;
                 cmdLine.put(key, s);
@@ -91,12 +93,22 @@ public class Main{
             } else if(s.equals("-messages")){
                 TOTAL_TO_SEND = Integer.parseInt(cmdLine.get(s));
                 assert TOTAL_TO_SEND > 0;
+            } else if(s.equals("-help")){
+                System.out.println("Usage: java -jar MBUSTest1.jar [<options>]\n"
+                        + "\t[-jdbc-url <jdbc-url>]\n"
+                        + "\t[-jdbc-user <user>]\n"
+                        + "\t[-jdbc-password <password>]\n"
+                        + "\t[-producers <NUM>]\n"
+                        + "\t[-consumers <NUM>\n"
+                        + "\t[-help]");
+                throw new ShowHelpException();
             }else
                 throw new WrongCommandLineArgument("Unknown switch:"+s);
         }
     }
     
     public static void checkSentAndReceived(int sentCnt, int receivedCnt){
+        System.out.format("Expected:%d consumed:%d", sentCnt, receivedCnt);
         if(sentCnt==receivedCnt)
             System.out.println("    +++ OK");
         else{
@@ -105,7 +117,14 @@ public class Main{
     }
 
     public static void main(String[] args) throws Exception{        
-        ParseCommandLine(args);
+        try{
+            ParseCommandLine(args);
+        }catch(ShowHelpException ex){
+            return;
+        }catch(Exception e){
+            System.err.println(e.getMessage());
+            return;
+        }
         System.out.println("Plain queues test");
         long start1 = System.currentTimeMillis();
         mainMBUS();
@@ -178,8 +197,9 @@ public class Main{
                 rs.close();
                 if(!rsnext)
                     break;
-                Thread.sleep(400);
+                Thread.sleep(20);
             }
+            System.out.println("All received");
 
 
             for(Thread thr: consumerThreads.getThreads())
@@ -216,28 +236,35 @@ public class Main{
         props.setProperty("user",getJDBC_USER());
         props.setProperty("password",getJDBC_PASSWORD());
 
-        Connection conn = DriverManager.getConnection(getJDBC_URL(), props);
-        conn.setAutoCommit(false);
-        Statement preparationSth = conn.createStatement();
+        Connection initConn = DriverManager.getConnection(getJDBC_URL(), props);
+        initConn.setAutoCommit(false);
+        Statement preparationSth = initConn.createStatement();
+        try{
+            preparationSth.execute("select mbus.drop_queue('"+qName+"');");
+        }catch(SQLException sqlEx){
+            if(!sqlEx.getSQLState().equals("42P01"))
+                throw sqlEx;
+            initConn.rollback();
+        }
         preparationSth.execute("select mbus.create_queue('"+qName+"',256);");
-        conn.commit();
+        initConn.commit();
         try{            
-            preparationSth.execute(String.format("select mbus.create_consumer('Aconsumer1','%s',$STR$%s$STR$);",qName, getSELECTOR()));
-            preparationSth.execute(String.format("select mbus.create_consumer('Aconsumer2','%s',$STR$%s$STR$);",qName, getNOT_SELECTOR()));
-            conn.commit();
+            preparationSth.execute(String.format("select mbus.create_consumer('cons1','%s',$STR$%s$STR$);",qName, getSELECTOR()));
+            preparationSth.execute(String.format("select mbus.create_consumer('cons2','%s',$STR$%s$STR$);",qName, getNOT_SELECTOR()));
+            initConn.commit();
         
             ThreadFactory producerThreads = new ThreadFactory();
-            ExecutorService producerExec = Executors.newCachedThreadPool(producerThreads);
+            ExecutorService producerExec = Executors.newFixedThreadPool(getTOTAL_PRODUCERS(),producerThreads);
             List<Future<Integer>> producersResults = new ArrayList<Future<Integer>>();
 
             ThreadFactory consumerThreads = new ThreadFactory();
-            ExecutorService consumerExec = Executors.newCachedThreadPool(consumerThreads);
+            ExecutorService consumerExec = Executors.newFixedThreadPool(getTOTAL_CONSUMERS()*3, consumerThreads);
             List<Future<Integer>> consumersResults = new ArrayList<Future<Integer>>();
             int i;
 
             for(i=0;i<getTOTAL_CONSUMERS();i++){
-                consumersResults.add(consumerExec.submit(MessageConsumer4MBUSWithSelector.CreateMessageConsumer4MBUSWithSelector(DriverManager.getConnection(getJDBC_URL(), props), qName, "Aconsumer2" )));
-                consumersResults.add(consumerExec.submit(MessageConsumer4MBUSWithSelector.CreateMessageConsumer4MBUSWithSelector(DriverManager.getConnection(getJDBC_URL(), props), qName, "Aconsumer1" )));
+                consumersResults.add(consumerExec.submit(MessageConsumer4MBUSWithSelector.CreateMessageConsumer4MBUSWithSelector(DriverManager.getConnection(getJDBC_URL(), props), qName, "cons2" )));
+                consumersResults.add(consumerExec.submit(MessageConsumer4MBUSWithSelector.CreateMessageConsumer4MBUSWithSelector(DriverManager.getConnection(getJDBC_URL(), props), qName, "cons1" )));
                 consumersResults.add(consumerExec.submit(MessageConsumer4MBUSWithSelector.CreateMessageConsumer4MBUSWithSelector(DriverManager.getConnection(getJDBC_URL(), props), qName, "default" )));
             }
 
@@ -248,8 +275,11 @@ public class Main{
             for(Future<Integer> f: producersResults)
                 totalSend+=f.get();
 
-            conn.setAutoCommit(true);
-            PreparedStatement sth=conn.prepareStatement("select 1 as has from mbus.qt$" + qName + " limit 1");
+            producerExec.shutdown();
+            consumerExec.shutdown();
+
+            initConn.setAutoCommit(true);
+            PreparedStatement sth=initConn.prepareStatement("select 1 as has from mbus.qt$" + qName + " limit 1");
             while(true){
                 sth.execute();
                 ResultSet rs = sth.getResultSet();
@@ -257,7 +287,7 @@ public class Main{
                 rs.close();
                 if(!rsnext)
                     break;
-                Thread.sleep(300);
+                Thread.sleep(20);
             }
 
 
@@ -268,17 +298,14 @@ public class Main{
             for(Future<Integer> f: consumersResults)
                 totalReceived+=f.get();
 
-            producerExec.shutdown();
-            consumerExec.shutdown();
-
             checkSentAndReceived(2*totalSend, totalReceived);
         }catch(SQLException e){
             System.err.println(e.getMessage());
             throw new RuntimeException(e.getMessage(), e);
         }finally{
-            conn.setAutoCommit(false);
+            initConn.setAutoCommit(false);
             preparationSth.executeQuery("select mbus.drop_queue('" + qName +"')");
-            conn.commit();
+            initConn.commit();
         }
     }
 /**
@@ -299,6 +326,13 @@ public class Main{
         Connection initConn = DriverManager.getConnection(getJDBC_URL(), props);
         initConn.setAutoCommit(false);
         Statement preparationSth = initConn.createStatement();
+        try{
+            preparationSth.execute("select mbus.drop_queue('"+qName+"');");
+        }catch(SQLException sqlEx){
+            if(!sqlEx.getSQLState().equals("42P01"))
+                throw sqlEx;
+            initConn.rollback();
+        }
         preparationSth.execute("select mbus.create_queue('"+qName+"',256);");
         initConn.commit();
         ExecutorService producerExec=null;
@@ -314,11 +348,13 @@ public class Main{
                 ThreadFactory consumerThreads = new ThreadFactory();
                 consumerExec = Executors.newFixedThreadPool(getTOTAL_CONSUMERS(), consumerThreads);
                 List<Future<Integer>> consumersResults = new ArrayList<Future<Integer>>();
+                
+                System.out.println("Going to work");
 
                 for(i=0;i<getTOTAL_CONSUMERS();i++){
                     consumersResults.add(consumerExec.submit(MessageConsumer4MBUS.CreateMessageConsumer4MBUS(DriverManager.getConnection(getJDBC_URL(), props), qName)));
                 }
-
+                
                 for(i=0;i<getTOTAL_PRODUCERS();i++)
                     producersResults.add(producerExec.submit(MessageProducer4MBUS.CreateMessageProducer(DriverManager.getConnection(getJDBC_URL(), props), qName, getTOTAL_TO_SEND())));
 
@@ -340,6 +376,7 @@ public class Main{
                         break;
                     Thread.sleep(10);
                 }
+                System.out.println("All received");
 
                 for(Thread thr: consumerThreads.getThreads())
                     thr.interrupt();
