@@ -25,7 +25,7 @@ public class MessageConsumer4MBUS implements Callable{
     }
 
     Connection conn;
-    PreparedStatement sth;
+    PreparedStatement pollQueueSth;
     String qName;
 
     /**
@@ -42,22 +42,26 @@ public class MessageConsumer4MBUS implements Callable{
         this.conn = conn;
         conn.setAutoCommit(false);
         this.qName = qName;
-        this.sth = sth;
+        this.pollQueueSth = sth;
     }
     
     @Override
     public Integer call() throws Exception{
+        int pollTriesCount=0;
         try{
             while(true){
-                sth.setString(1, qName);
-                sth.execute();
-                ResultSet rs = sth.getResultSet();
-                conn.commit();
+                pollQueueSth.setString(1, qName);
+                pollQueueSth.execute();
+                pollTriesCount++;
+                ResultSet rs = pollQueueSth.getResultSet();
                 if(rs.next()){
                     incrementMessagesReceived();
                     rs.close();
+                    if((pollTriesCount%10)==0)
+                        conn.commit();
                     continue;
                 }
+                conn.commit();
                 rs.close();
                 Thread.sleep(20);
                 if(Thread.currentThread().isInterrupted()){
@@ -65,7 +69,7 @@ public class MessageConsumer4MBUS implements Callable{
                 }
             }            
         }catch(InterruptedException  e){
-            try{ sth.close(); } catch(SQLException e2){ throw new RuntimeException("Cannot close statement:"+e.getMessage(), e2);}
+            try{ pollQueueSth.close(); } catch(SQLException e2){ throw new RuntimeException("Cannot close statement:"+e.getMessage(), e2);}
             return getMessagesReceived();
         }catch(SQLException e){            
             try{
@@ -78,7 +82,7 @@ public class MessageConsumer4MBUS implements Callable{
             throw new RuntimeException("SQL Exceptions:" + e.getMessage(), e);
         }finally{
             try{ 
-                sth.close(); 
+                pollQueueSth.close(); 
                 conn.commit();
             }catch(SQLException e){ 
                 throw new RuntimeException(e.getMessage(), e);

@@ -15,6 +15,7 @@ import java.util.concurrent.*;
 /**
  *
  * @author if
+ * Main class for test mbus for correctness and performance
  */
 public class Main{
     static int TOTAL_PRODUCERS = 7;
@@ -128,7 +129,10 @@ public class Main{
             sb.append(String.format("%02x", b&0xff));
         return sb.toString();
     }
-    
+   /**
+    * Makes test for orderer messages.
+    * @throws Exception 
+    */ 
     public static void mainMBUSArranged() throws  Exception{
         String qName = "arrangedq" + byteArrayToHex(java.security.MessageDigest.getInstance("MD5").digest(ByteBuffer.allocate(8).putLong(Thread.currentThread().getId()).array()));
         qName = qName.substring(0, 31);
@@ -195,6 +199,14 @@ public class Main{
             conn.commit();            
         }
     }
+    
+    /**
+     * Makes test for several subscribers with two
+     * @throws InterruptedException
+     * @throws ExecutionException
+     * @throws SQLException
+     * @throws NoSuchAlgorithmException 
+     */
     public static void mainMBUSSelector() throws InterruptedException, ExecutionException, SQLException, NoSuchAlgorithmException{
         String qName = "testq" + byteArrayToHex(java.security.MessageDigest.getInstance("MD5").digest(ByteBuffer.allocate(8).putLong(Thread.currentThread().getId()).array()));
         qName = qName.substring(0, 31);
@@ -269,7 +281,13 @@ public class Main{
             conn.commit();
         }
     }
-
+/**
+ * 
+ * @throws InterruptedException
+ * @throws ExecutionException
+ * @throws SQLException
+ * @throws NoSuchAlgorithmException 
+ */
     public static void mainMBUS() throws InterruptedException, ExecutionException, SQLException, NoSuchAlgorithmException{
         String qName = "mainq" + byteArrayToHex(java.security.MessageDigest.getInstance("MD5").digest(ByteBuffer.allocate(8).putLong(Thread.currentThread().getId()).array()));
         qName = qName.substring(0, 31);
@@ -290,11 +308,11 @@ public class Main{
                 Connection conn = DriverManager.getConnection(getJDBC_URL(), props);
 
                 ThreadFactory producerThreads = new ThreadFactory();
-                producerExec = Executors.newCachedThreadPool(producerThreads);
+                producerExec = Executors.newFixedThreadPool(getTOTAL_PRODUCERS(), producerThreads);
                 List<Future<Integer>> producersResults = new ArrayList<Future<Integer>>();
 
                 ThreadFactory consumerThreads = new ThreadFactory();
-                consumerExec = Executors.newCachedThreadPool(consumerThreads);
+                consumerExec = Executors.newFixedThreadPool(getTOTAL_CONSUMERS(), consumerThreads);
                 List<Future<Integer>> consumersResults = new ArrayList<Future<Integer>>();
 
                 for(i=0;i<getTOTAL_CONSUMERS();i++){
@@ -304,10 +322,12 @@ public class Main{
                 for(i=0;i<getTOTAL_PRODUCERS();i++)
                     producersResults.add(producerExec.submit(MessageProducer4MBUS.CreateMessageProducer(DriverManager.getConnection(getJDBC_URL(), props), qName, getTOTAL_TO_SEND())));
 
+                producerExec.shutdown();
+                consumerExec.shutdown();
+
                 int totalSend=0;
                 for(Future<Integer> f: producersResults)
                     totalSend+=f.get();
-                System.err.println("Producers done");
 
                 conn.setAutoCommit(true);
                 PreparedStatement sth=conn.prepareStatement("select 1 as has from mbus.qt$" + qName + " limit 1");
@@ -318,7 +338,7 @@ public class Main{
                     rs.close();
                     if(!rsnext)
                         break;
-                    Thread.sleep(100);
+                    Thread.sleep(10);
                 }
 
                 for(Thread thr: consumerThreads.getThreads())

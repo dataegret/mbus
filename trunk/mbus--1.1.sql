@@ -865,8 +865,8 @@ CREATE FUNCTION create_view(qname text, cname text DEFAULT 'default'::text) RETU
 declare
 	param hstore:=hstore('qname',qname)||hstore('cname',cname);
 begin
-	execute string_format($STR$ create view %<qname>_q as select data from mbus.consume('%<qname>', '%<cname>')$STR$, param);
-	execute string_format($STR$
+	execute mbus.string_format($STR$ create view %<qname>_q as select data from mbus.consume('%<qname>', '%<cname>')$STR$, param);
+	execute mbus.string_format($STR$
 	create or replace function trg_post_%<qname>() returns trigger as
 	$thecode$
 	begin
@@ -891,8 +891,8 @@ CREATE FUNCTION create_view(qname text, cname text, sname text, viewname text) R
 declare
 	param hstore:=hstore('qname',qname)||hstore('cname',cname)|| hstore('sname',sname||'.')|| hstore('viewname', coalesce(viewname, 'public.'||qname));
 begin
-	execute string_format($STR$ create view %<sname>%<viewname> as select data from mbus.consume('%<qname>', '%<cname>')$STR$, param);
-	execute string_format($STR$
+	execute mbus.string_format($STR$ create view %<sname>%<viewname> as select data from mbus.consume('%<qname>', '%<cname>')$STR$, param);
+	execute mbus.string_format($STR$
 	create or replace function %<sname>trg_post_%<viewname>() returns trigger as
 	$thecode$
 	begin
@@ -979,11 +979,11 @@ begin
 		return;
 	end if;
 
-	execute string_format($SCH$ %<oper> usage on schema mbus %<dir> %<usr>$SCH$, param);
-	execute string_format($VSCH$ %<oper> usage on schema %<schemaname> %<dir> %<usr>$VSCH$, param);
-	execute string_format($VIW$ %<oper> insert,select on %<schemaname>.%<viewname> %<dir> %<usr>$VIW$, param);
-	execute string_format($TBL$ %<oper> all on mbus.qt$%<qname> %<dir> %<usr>$TBL$, param);
-	execute string_format($FNC$   
+	execute mbus.string_format($SCH$ %<oper> usage on schema mbus %<dir> %<usr>$SCH$, param);
+	execute mbus.string_format($VSCH$ %<oper> usage on schema %<schemaname> %<dir> %<usr>$VSCH$, param);
+	execute mbus.string_format($VIW$ %<oper> insert,select on %<schemaname>.%<viewname> %<dir> %<usr>$VIW$, param);
+	execute mbus.string_format($TBL$ %<oper> all on mbus.qt$%<qname> %<dir> %<usr>$TBL$, param);
+	execute mbus.string_format($FNC$   
 		with f as ( 
 			SELECT n.nspname ||  '.' || p.proname || '(' || pg_catalog.pg_get_function_identity_arguments(p.oid) || ')' as func
 				FROM pg_catalog.pg_proc p
@@ -994,7 +994,7 @@ begin
 	$FNC$, param) into l_func;
 	
 	param := param || hstore('l_func', l_func);
-	execute string_format($FNCL$%<oper> execute on function %<l_func> %<dir> %<usr>$FNCL$, param);
+	execute mbus.string_format($FNCL$%<oper> execute on function %<l_func> %<dir> %<usr>$FNCL$, param);
 	
 end;
 $_$;
