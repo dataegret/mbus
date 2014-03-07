@@ -858,34 +858,7 @@ end;
 $_$;
 
 
-
-CREATE FUNCTION create_view(qname text, cname text DEFAULT 'default'::text) RETURNS void
-    LANGUAGE plpgsql
-    AS $_$
-declare
-	param hstore:=hstore('qname',qname)||hstore('cname',cname);
-begin
-	execute mbus.string_format($STR$ create view %<qname>_q as select data from mbus.consume('%<qname>', '%<cname>')$STR$, param);
-	execute mbus.string_format($STR$
-	create or replace function trg_post_%<qname>() returns trigger as
-	$thecode$
-	begin
- 		perform mbus.post('%<qname>',new.data);
- 		return null;
-	end;
-	$thecode$
-	security definer
-	SET search_path = mbus, pg_temp, public
-	language plpgsql;
-
-	create trigger trg_%<qname>  instead of insert on %<qname>_q for each row execute procedure trg_post_%<qname>();   
-  	$STR$, param);
-end;
-$_$;
-
-
-
-CREATE FUNCTION create_view(qname text, cname text, sname text, viewname text) RETURNS void
+CREATE FUNCTION create_view(qname text, cname text default 'default', sname text default 'public', viewname text default null) RETURNS void
     LANGUAGE plpgsql
     AS $_$
 declare
@@ -897,30 +870,6 @@ begin
 	$thecode$
 	begin
 		perform mbus.post('%<qname>',new.data);
- 		return null;
-	end;
-	$thecode$
-	security definer
-	SET search_path = mbus, pg_temp, public
-	language plpgsql;
-
-	create trigger trg_%<qname>  instead of insert on %<sname>%<viewname> for each row execute procedure %<sname>trg_post_%<viewname>();   
-	$STR$, param);
-end;
-$_$;
-
-CREATE FUNCTION create_view_prop(qname text, cname text, sname text, viewname text) RETURNS void
-    LANGUAGE plpgsql
-    AS $_$
-declare
-	param hstore := hstore('qname',qname)||hstore('cname',cname)|| hstore('sname',sname||'.')|| hstore('viewname', coalesce(viewname, 'public.'||qname));
-begin
-	execute mbus.string_format($STR$ create view %<sname>%<viewname> as select data, properties from mbus.consume('%<qname>', '%<cname>')$STR$, param);
-	execute mbus.string_format($STR$
-	create or replace function %<sname>trg_post_%<viewname>() returns trigger as
-	$thecode$
-	begin
-		perform mbus.post_%<qname>(new.data, null::hstore, new.properties, null::timestamp, null::timestamp);
  		return null;
 	end;
 	$thecode$
