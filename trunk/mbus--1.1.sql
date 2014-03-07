@@ -295,7 +295,7 @@ select
               when s[1] like '^%<%>' escape '^'
                 then coalesce($2->(substr(s[1],3,length(s[1])-3)),'')
               when s[1] like '^%#%#' escape '^'
-                then coalesce(quote_html(($2->(substr(s[1],3,length(s[1])-3)))),'')
+                then coalesce(mbus.quote_html(($2->(substr(s[1],3,length(s[1])-3)))),'')
               when s[1] ~ '%[-!@#$^&*=+]'
                 then coalesce($2->(substr(s[1],2,1)),'')
               when s[1]='%%'
