@@ -153,18 +153,47 @@ CREATE INDEX tempq_name_added ON tempq USING btree (((headers -> 'tempq'::text))
 
 create or replace function _is_superuser() returns boolean as
 $code$
+/*
+-->>>Run it as superuser
+ begin
+   if not mbus._is_superuser() then
+     raise exception 'Not superuser';     
+   end if;
+ end;
+--<<<
+*/
    select rolsuper from pg_catalog.pg_roles where rolname=session_user;
 $code$
 language sql;
 
 create or replace function mbus.can_consume(qname text, cname text default 'default') returns boolean as
 $code$
+/*
+-->>>Run it as superuser
+begin
+    perform mbus.create_queue('q1',128);
+    if not mbus.can_consume('q1') then
+     raise exception 'Superuser cannot consume';
+    end if;
+end;
+--<<<
+*/
    select mbus._is_superuser() or pg_has_role(session_user,'mbus_' || current_database() || '_consume_' || $1 || '_by_' || $2,'usage')::boolean;
 $code$
 language sql;
 
 create or replace function can_post(qname text) returns boolean as
 $code$
+/*
+-->>>Run it as superuser
+begin
+    perform mbus.create_queue('q1',128);
+    if not mbus.can_post('q1') then
+     raise exception 'Superuser cannot post';
+    end if;
+end;
+--<<<
+*/
    select mbus._is_superuser() or pg_has_role(session_user,'mbus_' || current_database() || '_post_' || $1,'usage')::boolean;
 $code$
 language sql;
@@ -172,6 +201,26 @@ language sql;
 
 create or replace function mbus._should_be_able_to_consume(qname text, cname text default 'default') returns void as
 $code$
+/*
+-->>>Create ordinal queue
+begin
+  perform mbus.create_queue('q1',128);
+  create role atestrole login;
+  set local session authorization atestrole;
+  if has_table_privilege('mbus.qt$q1','SELECT') then
+    raise exception 'Newly added user already can consume!';
+  end if;
+  reset session_authorization;
+ end;
+--<<<
+
+-->>>Create role-based queue
+begin
+  perform mbus.create_queue('q2',128, true);
+  perform mbus._should_be_able_to_consume('q2');
+end;
+--<<<
+*/
 begin
   if not mbus._is_superuser() and not mbus.can_consume(qname, cname) then
     raise exception 'Access denied';
@@ -285,6 +334,35 @@ $BODY$
 explain analyze
 select string_format($$%"name" == %{name} is %[value] == %'value' and n=%<n> and name=%'name' %%<v> and html=%#amp# and %#$$, hstore('name','la la') || hstore('value', 'The Value')||hstore('n',n::text)||hstore('amp','<a href="lakak">')||hstore('#','hash sign'))
   from generate_series(1,100) as gs(n);
+
+ -->>>string_format
+ declare
+   testtable text[][]:=array[
+     array[$STR$test$STR$,$STR$test=>test$STR$,$STR$test$STR$],
+     array[$STR$%"username"$STR$,$STR$username=>"user name"$STR$,$STR$"user name"$STR$],
+     array[$STR$%{username}$STR$,$STR$username=>"user name"$STR$,$STR$"user name"$STR$],
+     array[$STR$Q%{username}$STR$,$STR$username=>"user name"$STR$,$STR$Q"user name"$STR$],
+     array[$STR$Q%{username}Q$STR$,$STR$username=>"user name"$STR$,$STR$Q"user name"Q$STR$],
+     array[$STR$%{username}Q$STR$,$STR$username=>"user name"$STR$,$STR$"user name"Q$STR$],
+     array[$STR$%{username}Q$STR$,$STR$username=>"username"$STR$,$STR$usernameQ$STR$],
+     
+     array[$STR$%'username'$STR$,$STR$username=>"username"$STR$,$STR$'username'$STR$],
+     array[$STR$%[username]Q$STR$,$STR$username=>"username"$STR$,$STR$'username'Q$STR$],
+     
+     array[$STR$%<username>Q$STR$,$STR$username=>"user name"$STR$,$STR$user nameQ$STR$],
+     array[$STR$%#gt#%#lt#%#amp#Q$STR$,$STR$gt=>">",lt=>"<",amp=>"&"$STR$,$STR$&gt;&lt;&amp;Q$STR$]
+   ];
+   i integer;
+   res text;
+  begin
+   for i in 1..array_upper(testtable,1) loop
+     res:=mbus.string_format(testtable[i][1],testtable[i][2]::hstore);
+     if res <> testtable[i][3] then
+       raise exception '%', 'Format ' || testtable[i][1] || ', params are:' || testtable[i][2] || ', got ' ||coalesce(res,'<NULL>') || ', expected ' || testtable[i][3];
+     end if;
+   end loop;
+  end;
+ --<<<
 */
 select
   string_agg(
@@ -337,6 +415,15 @@ CREATE FUNCTION clear_tempq()
 RETURNS void
 LANGUAGE plpgsql
 AS $$
+/*
+-->>>
+ declare
+  tqid text:=mbus.create_temporary_queue();
+  begin
+    perform mbus.clear_tempq();
+  end;
+--<<
+*/
 begin
 	delete from mbus.trigger where dst like 'temp.%' and not exists (select * from pg_stat_activity where dst like 'temp.' || md5(pid::text || backend_start::text) || '%');
 	delete from mbus.tempq where not exists (select * from pg_stat_activity where (headers->'tempq') like 'temp.' || md5(pid::text || backend_start::text) || '.%');
@@ -366,6 +453,20 @@ CREATE FUNCTION consume_temp(tqname text)
 RETURNS SETOF qt_model
 LANGUAGE plpgsql
 AS $$
+/*
+-->>>consume temporary queue
+ declare
+  tqid text:=mbus.create_temporary_queue();
+  rv mbus.qt_model;
+  begin
+    perform mbus.post(tqid,'key=>val12');
+    select * into rv from mbus.consume(tqid);
+    if not found or (rv.data->'key') is distinct from 'val12' then
+      raise exception 'Cannot consume expected message from temp q: got %', rv;
+    end if;
+  end;
+--<<
+*/
 declare
 	rv mbus.qt_model;
 begin
@@ -625,6 +726,34 @@ CREATE FUNCTION create_queue(qname text, consumers_cnt integer, is_roles_securit
 RETURNS void
 LANGUAGE plpgsql
 AS $_$
+/*
+ -->>>Queue creation and simple post in it
+ declare
+  h hstore;
+  rv mbus.qt_model;
+ begin
+  perform mbus.create_queue('q1',128);
+  perform mbus.create_consumer('ananotherconsumer','q1');
+  perform mbus.post(qname:='q1',data:=('key=>value12')::hstore, headers:=hstore('enqueue_time', (now()+'1s'::interval)::text));
+  select * into rv from mbus.consume(qname:='q1',cname:='ananotherconsumer');
+  if not found or ((rv.data)->'key') is null or ((rv.data)->'key') <> 'value12' then
+    raise exception 'cannot get posted message. Got: %', rv;
+  end if;  
+
+  select * into rv from mbus.consume(qname:='q1');
+  if not found or ((rv.data)->'key') is null or ((rv.data)->'key') <> 'value12' then
+    raise exception 'cannot get posted message. Got: %', rv;
+  end if;  
+
+  select * into rv from mbus.consume(qname:='q1',cname:='ananotherconsumer');
+  if found then
+    raise exception 'get duplicated message. Got: %', rv;
+  end if;  
+
+ end;
+ --<<<
+
+*/
 declare
 	schname text:= 'mbus';
 	post_src text;
@@ -660,7 +789,7 @@ begin
                                 received
                                )values(
                                 $1,
-                                hstore('enqueue_time',now()::timestamp::text) ||
+                                hstore('enqueue_time',coalesce((headers->'enqueue_time'),now()::timestamp::text)) ||
                                 hstore('source_db', current_database())       ||
                                 hstore('destination_queue', $Q$<!qname!>$Q$)       ||
                                 coalesce($2,''::hstore)||
@@ -669,7 +798,7 @@ begin
                                 $3,
                                 coalesce($4, now() - '1h'::interval),
                                 $5, 
-                                now(), 
+                                coalesce((headers->'enqueue_time')::timestamp,now()), 
                                 coalesce($6, $Q$<!qname!>$Q$ || '.' || nextval('mbus.seq')),
                                 array[]::int[] 
                                ) returning iid;
@@ -802,6 +931,47 @@ $$;
 CREATE FUNCTION create_trigger(src text, dst text, selector text DEFAULT NULL::text) RETURNS void
     LANGUAGE plpgsql
     AS $_$
+/*
+
+-->>>Trigger test
+declare
+  h hstore;
+  rv mbus.qt_model;
+ begin
+  perform mbus.create_queue('q1',128);
+  perform mbus.create_queue('qcopy',128);
+  perform mbus.create_queue('qcopy2',128);
+  perform mbus.create_trigger('q1','qcopy');
+  perform mbus.create_trigger('q1','qcopy2',$SEL$not exist(t.data,'key2') or (t.data->'key2')<>'N'$SEL$);
+
+  perform mbus.post(qname:='q1',data:=('key=>val')::hstore, headers:=hstore('enqueue_time', (now()+'1s'::interval)::text));
+
+  select * into rv from mbus.consume('qcopy');
+  if not found or ((rv.data)->'key') is distinct from 'val' then
+    raise notice '%', found;
+    raise exception '1.Cannot get copy of message!';
+  end if;
+
+  select * into rv from mbus.consume('qcopy2');
+  if not found or ((rv.data)->'key') is distinct from 'val' then
+    raise notice '%', found;
+    raise exception '2.Cannot get copy of message!';
+  end if;
+
+  perform mbus.post(qname:='q1',data:=('key=>val,key2=>N')::hstore, headers:=hstore('enqueue_time', (now()+'1s'::interval)::text));
+  select * into rv from mbus.consume('qcopy');
+  if not found or ((rv.data)->'key') is distinct from 'val' then
+    raise notice '%', found;
+    raise exception '3.Cannot get copy of message!%',rv;
+  end if;
+
+  select * into rv from mbus.consume('qcopy2');
+  if found then
+    raise exception 'Get copy of message that must be filtered out!';
+  end if;
+end;
+--<<<
+*/
 declare
  selfunc text;
 begin
@@ -861,6 +1031,24 @@ $_$;
 CREATE FUNCTION create_view(qname text, cname text default 'default', sname text default 'public', viewname text default null) RETURNS void
     LANGUAGE plpgsql
     AS $_$
+/*
+-->>>Views test
+ declare
+  rv hstore;
+ begin
+   perform mbus.create_queue('q1',128);
+   perform mbus.create_consumer('ananotherconsumer','q1');
+   perform mbus.post(qname:='q1',data:=('key=>value12')::hstore, headers:=hstore('enqueue_time', (now()+'1s'::interval)::text));
+   perform mbus.create_view(qname:='q1', viewname:='atestviewforq1');
+   insert into atestviewforq1(data) values('thekey=>theval'::hstore);
+   select data into rv from atestviewforq1;
+   if not found or (rv->'key') is distinct from 'value12' then
+     raise exception 'cannot consume expected record from created view:%',found::text || ' ' ||rv;
+   end if;
+ end;   
+--<<<
+*/
+
 declare
 	param hstore:=hstore('qname',qname)||hstore('cname',cname)|| hstore('sname',sname||'.')|| hstore('viewname', coalesce(viewname, 'public.'||qname));
 begin
@@ -1709,6 +1897,78 @@ CREATE FUNCTION trigger_work_to_jms_trigger_queue_testing(t qt_model) RETURNS bo
                          end;
                         $$;
 
+create or replace function test_a_routine(fname text) returns 
+ table(routine text, testname text, result text, passed boolean, failed boolean, error_message text) as
+
+ $code$
+/*
+ Тестируем функции.
+ Параметр: название функции в виде "название" или "схема.название". "Название" может быть шаблоном для like.
+ Тесты берутся из комменариев в тексте функций. Тест начинается со строки
+ -->>>Название теста
+ -- Тут собственно тест
+ -- тест всего лишь не должен выбросить исключений
+ -- если не выбросил - то все хорошо, если выбросил - тест не пройден
+ --<<<
+
+ Тестов можен быть несколько
+ -->>>Проверяем присванивание
+  declare
+   v text;
+   begin
+    v:=100;
+    if v<>100 then
+      raise exception 'Strange behavior of assignment';
+    end if;
+  end;
+  --<<<
+
+  Все тесты для одной функции выполняются в одной транзакции; после выполнения тестов одной функции транзакция для
+  проведения тестов для этой функции откатывается; по завершении всех тестов откатывается общая транзакция.
+*/
+declare
+ src text;
+ matches text[];
+ rs record;
+ rname text:=coalesce(substring(fname from $RE$\.(.+)$RE$), fname);
+ sname text:=coalesce(substring(fname from $RE$^([^.]*)\.$RE$),'public');
+ r record;
+ result text;
+ begin
+  if rname is null then
+    raise exception 'Wrong function name:%', fname;
+  end if;
+  
+  for rs in (select routine_definition as def, ro.specific_schema, ro.routine_name from information_schema.routines ro where ro.specific_schema=sname and routine_name like rname) loop
+    begin
+       passed:=null;
+       failed:=null;
+       error_message:='No tests available';
+       routine:=rs.specific_schema || '.' || rs.routine_name;
+       testname:=null;
+       for r in (select * from regexp_matches(rs.def,'[^\n]*\n?\s*-->>>([^\n]*)\n((.(?!--<<<))+)\s*--<<<[^\n]*\n','g') as ms(s)) loop
+        passed:=true;
+        failed:=false;
+        error_message:=null;
+        testname:=r.s[1];
+        begin
+          execute 'do $theroutenecodegoeshere$ ' || r.s[2] || ' $theroutenecodegoeshere$;';
+        exception 
+          when others then 
+            passed:=false;
+            failed:=true;
+            error_message:=sqlerrm || ' sqlstate:' || sqlstate;
+        end;
+        return next;
+       end loop;
+       raise exception sqlstate 'RB999';
+     exception
+       when sqlstate 'RB999' then null;
+    end;   
+   end loop;     
+ end;
+$code$
+language plpgsql
 
 
 
