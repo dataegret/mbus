@@ -204,22 +204,46 @@ $code$
 /*
 -->>>Create ordinal queue
 begin
-  perform mbus.create_queue('q1',128);
+  perform mbus.create_queue('qxz1',128);
   create role atestrole login;
   set local session authorization atestrole;
-  if has_table_privilege('mbus.qt$q1','SELECT') then
+  if has_table_privilege('mbus.qt$qxz1','SELECT') then
     raise exception 'Newly added user already can consume!';
   end if;
   reset session_authorization;
  end;
 --<<<
 
+do $code2$
 -->>>Create role-based queue
+declare
+ failed_but_ok boolean;
 begin
-  perform mbus.create_queue('q2',128, true);
-  perform mbus._should_be_able_to_consume('q2');
+  perform mbus.create_queue('qzx2',128, true);
+  perform mbus._should_be_able_to_consume('qzx2');
+  set local session authorization atestrole;
+
+  failed_but_ok:=false;
+  begin
+    perform mbus._should_be_able_to_consume('qzx2');
+  exception 
+    when others then 
+      if sqlerrm like '%denied%' then
+        failed_but_ok:=true;
+      end if;
+      raise notice '************************ %', sqlerrm;
+  end;
+  if not failed_but_ok then
+    raise exception 'Newly added user already can consume!';
+  end if;
+  reset session_authorization;
+  execute 'grant mbus_' || current_catalog || '_consume_qzx2_by_default to atestrole';
+
+  set local session authorization atestrole;
+  perform mbus._should_be_able_to_consume('qzx2');
 end;
 --<<<
+$code2$
 */
 begin
   if not mbus._is_superuser() and not mbus.can_consume(qname, cname) then
@@ -231,6 +255,51 @@ language plpgsql;
 
 create or replace function mbus._should_be_able_to_post(qname text) returns void as
 $code$
+/*
+-->>>Create ordinal queue
+begin
+  perform mbus.create_queue('qxz1',128);
+  create role atestrole2 login;
+  set local session authorization atestrole2;
+  if has_table_privilege('mbus.qt$qxz1','SELECT') then
+    raise exception 'Newly added user already can consume!';
+  end if;
+  reset session_authorization;
+ end;
+--<<<
+
+do $code2$
+-->>>Create role-based queue
+declare
+ failed_but_ok boolean;
+begin
+  perform mbus.create_queue('qzx2',128, true);
+  perform mbus._should_be_able_to_post('qzx2');
+  set local session authorization atestrole2;
+
+  failed_but_ok:=false;
+  begin
+    perform mbus._should_be_able_to_post('qzx2');
+  exception 
+    when others then 
+      if sqlerrm like '%denied%' then
+        failed_but_ok:=true;
+      end if;
+      raise notice '************************ %', sqlerrm;
+  end;
+  if not failed_but_ok then
+    raise exception 'Newly added user already can post!';
+  end if;
+  reset session_authorization;
+  execute 'grant mbus_' || current_catalog || '_consume_qzx2_by_default to atestrole2';
+
+  set local session authorization atestrole2;
+  perform mbus._should_be_able_to_consume('qzx2');
+end;
+--<<<
+$code2$
+*/
+
 begin
   if not mbus._is_superuser() and not mbus.can_post(qname) then
     raise exception 'Access denied';
@@ -416,13 +485,13 @@ RETURNS void
 LANGUAGE plpgsql
 AS $$
 /*
--->>>
+-->>>Test for ability to just run
  declare
   tqid text:=mbus.create_temporary_queue();
   begin
     perform mbus.clear_tempq();
   end;
---<<
+--<<<
 */
 begin
 	delete from mbus.trigger where dst like 'temp.%' and not exists (select * from pg_stat_activity where dst like 'temp.' || md5(pid::text || backend_start::text) || '%');
@@ -430,14 +499,29 @@ begin
 end;
 $$;
 
-
-
-
-
 CREATE FUNCTION consume(qname text, cname text DEFAULT 'default'::text) 
 RETURNS SETOF qt_model
 LANGUAGE plpgsql
 AS $_$
+/*
+-->>>Will try to consume unexisted queue
+declare
+  failed_but_ok boolean;
+begin
+  begin
+    perform mbus.consume('zzzqqqq');
+  exception
+    when others then
+      if sqlerrm like '%queue%were%defined%' then
+        failed_but_ok:=true;
+      end if;
+  end;
+  if not failed_but_ok then
+    raise exception 'Can consumer from unexisted queue';
+  end if;
+end;
+--<<<
+*/
 begin
 	if qname like 'temp.%' then
         	return query select * from mbus.consume_temp(qname);
@@ -459,13 +543,14 @@ AS $$
   tqid text:=mbus.create_temporary_queue();
   rv mbus.qt_model;
   begin
-    perform mbus.post(tqid,'key=>val12');
+    perform mbus.create_queue('junk',32);
+    perform mbus.post(tqid,'key=>val12'::hstore);
     select * into rv from mbus.consume(tqid);
     if not found or (rv.data->'key') is distinct from 'val12' then
       raise exception 'Cannot consume expected message from temp q: got %', rv;
     end if;
   end;
---<<
+--<<<
 */
 declare
 	rv mbus.qt_model;
@@ -727,28 +812,124 @@ RETURNS void
 LANGUAGE plpgsql
 AS $_$
 /*
- -->>>Queue creation and simple post in it
+ -->>>Queue&consumer creation/drop and simple post in it; consume after; ensure roles would have been created
  declare
   h hstore;
   rv mbus.qt_model;
+  failed_but_ok boolean;
  begin
-  perform mbus.create_queue('q1',128);
-  perform mbus.create_consumer('ananotherconsumer','q1');
-  perform mbus.post(qname:='q1',data:=('key=>value12')::hstore, headers:=hstore('enqueue_time', (now()+'1s'::interval)::text));
-  select * into rv from mbus.consume(qname:='q1',cname:='ananotherconsumer');
+  perform mbus.create_queue('qzqn1',128);
+  if not exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_post_qzqn1') then
+    raise exception 'Expected role % does not found', 'mbus_' || current_catalog || '_post_qzqn1';
+  end if;
+
+  if not exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_consume_qzqn1_by_default') then
+    raise exception 'Expected role % does not found', 'mbus_' || current_catalog || '_consume_q1_by_default';
+  end if;
+
+  failed_but_ok:=false;
+  begin
+    perform mbus.create_consumer('ananotherconsumer','qzqn11');
+    exception 
+     when others then
+      if sqlerrm like '%Wrong%queue%name%:%qzqn11%' then
+        failed_but_ok:=true;
+      end if;
+  end;
+
+  if not failed_but_ok then
+    raise exception 'Can create subscriber to unexist queue';
+  end if;
+
+  perform mbus.create_consumer('ananotherconsumer','qzqn1');
+  if not exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_consume_qzqn1_by_ananotherconsumer') then
+    raise exception 'Expected role % does not found', 'mbus_' || current_catalog || '_consume_qzqn1_by_ananotherconsumer';
+  end if;
+
+  perform mbus.post(qname:='qzqn1',data:=('key=>value12')::hstore, headers:=hstore('enqueue_time', (now()+'1s'::interval)::text));
+  select * into rv from mbus.consume(qname:='qzqn1',cname:='ananotherconsumer');
   if not found or ((rv.data)->'key') is null or ((rv.data)->'key') <> 'value12' then
     raise exception 'cannot get posted message. Got: %', rv;
   end if;  
 
-  select * into rv from mbus.consume(qname:='q1');
+  failed_but_ok:=false;
+  begin
+    perform mbus.post(qname:='qzqn111',data:=('key=>value12')::hstore, headers:=hstore('enqueue_time', (now()+'1s'::interval)::text));
+    exception 
+     when others then
+      if sqlerrm like '%queue%' then
+        failed_but_ok:=true;
+      end if;
+  end;
+  if not failed_but_ok then
+    raise exception 'Can post to unexist queue';
+  end if;
+
+  select * into rv from mbus.consume(qname:='qzqn1');
   if not found or ((rv.data)->'key') is null or ((rv.data)->'key') <> 'value12' then
     raise exception 'cannot get posted message. Got: %', rv;
   end if;  
 
-  select * into rv from mbus.consume(qname:='q1',cname:='ananotherconsumer');
+  failed_but_ok:=false;
+  begin
+    select * into rv from mbus.consume(qname:='qzqn1qqzz');
+    exception 
+     when others then
+      if sqlerrm like '%Queue%' then
+        failed_but_ok:=true;
+      end if;
+  end;
+  if not failed_but_ok then
+    raise exception 'Can consume from unexist queue';
+  end if;
+
+  select * into rv from mbus.consume(qname:='qzqn1',cname:='ananotherconsumer');
   if found then
     raise exception 'get duplicated message. Got: %', rv;
   end if;  
+
+  failed_but_ok:=false;
+  begin
+    perform mbus.drop_queue('q1qqqzzxx');
+    exception 
+     when others then
+      if sqlerrm like '%Queue%' then
+        failed_but_ok:=true;
+      end if;
+  end;
+  if not failed_but_ok then
+    raise exception 'Can consume from unexist queue';
+  end if;
+
+  perform mbus.drop_queue('qzqn1');
+  if exists(select * from information_schema.routines where routine_schema='mbus' and routine_name like '%_qzqn1_%') then
+    raise exception 'Not all routies have been dropped due dropping of queue q1';
+  end if;
+
+ end;
+ --<<<
+
+ -->>>Ordering test
+ declare
+  iid text;
+  rv mbus.qt_model;
+ begin
+   perform mbus.create_queue('zq_ordr',8);
+   iid:=mbus.get_iid('zq_ordr');
+   if iid is null then 
+     raise exception 'Get null for iid';
+   end if;
+   perform mbus.post_zq_ordr(data:='k=>1', iid:=iid);
+   perform mbus.post('zq_ordr',data:='k=>2', headers:=hstore('consume_after',array[iid]::text));
+   select * into rv from mbus.consume_zq_ordr_by_default();
+   if rv.data<>'k=>1'::hstore then
+     raise notice 'Order has been destroyed';
+   end if;
+
+   select * into rv from mbus.consume_zq_ordr_by_default();
+   if rv.data<>'k=>2'::hstore then
+     raise notice 'Order has been destroyed';
+   end if;
 
  end;
  --<<<
@@ -1104,9 +1285,7 @@ declare
 	l_func text;
 begin
 /*
-	execute string_format($STR$
 
-	$STR$, param);
 */
 	if lower(oper) = 'grant' then
 		param := param || hstore('dir', 'to');
@@ -1159,7 +1338,11 @@ CREATE FUNCTION drop_queue(qname text) RETURNS void
 declare
  r record;
 begin
- execute 'drop table mbus.qt$' || qname || ' cascade';
+ begin
+   execute 'drop table mbus.qt$' || qname || ' cascade';
+ exception
+  when sqlstate '42P01' then raise exception 'Queue % does not exists', qname;
+ end;
 
  perform mbus._drop_queue_role(qname);
  for r in (select * from 
@@ -1665,6 +1848,7 @@ $TEXT$::text;
 $_$;
 
 
+--' - single quote here is just for colorer
 
 CREATE FUNCTION regenerate_functions(is_full_regeneration boolean default true) RETURNS void
     LANGUAGE plpgsql
@@ -1739,7 +1923,7 @@ begin
         $QQ$
          begin
           if qname like 'temp.%' then
-            return mbus.post_temp(qname, data, headers, properties, delayed_until, expires, iid);
+            return mbus.post_temp(qname, data, headers, properties, delayed_until, expires);
           end if;
           case lower(qname) $FUNC$ || post_qry || $FUNC$
           else
@@ -1909,6 +2093,9 @@ create or replace function test_a_routine(fname text) returns
  -- Тут собственно тест
  -- тест всего лишь не должен выбросить исключений
  -- если не выбросил - то все хорошо, если выбросил - тест не пройден
+ begin
+   perform 1;
+ end;
  --<<<
 
  Тестов можен быть несколько
@@ -1917,7 +2104,7 @@ create or replace function test_a_routine(fname text) returns
    v text;
    begin
     v:=100;
-    if v<>100 then
+    if v::integer<>100 then
       raise exception 'Strange behavior of assignment';
     end if;
   end;
@@ -1968,7 +2155,7 @@ declare
    end loop;     
  end;
 $code$
-language plpgsql
+language plpgsql;
 
 
 
