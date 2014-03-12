@@ -21,7 +21,7 @@ CREATE SEQUENCE qt_model_id_seq
 
 
 CREATE TABLE qt_model (
-	id integer NOT NULL,
+	id bigint NOT NULL,
 	added timestamp without time zone NOT NULL,
 	iid text NOT NULL,
 	delayed_until timestamp without time zone NOT NULL,
@@ -1907,6 +1907,12 @@ declare
  peek_qry text:='';
  take_qry text:='';
 begin
+ --set data type for column id to bigint for all queues where datatype is integer
+ --it's required just for migration from older version
+  for r in (select table_name from information_schema.columns where table_schema='mbus' and table_name like 'qt$%' and data_type='integer') loop
+    execute mbus.string_format('alter table mbus.%"table" alter column id set data type bigint', hstore('table', r.table_name));
+  end loop;
+
  for r in select * from mbus.queue loop
    post_qry:=post_qry || $$ when '$$ || lower(r.qname) || $$' then return mbus.post_$$ || r.qname || '(data, headers, properties, delayed_until, expires);'||chr(10);
    msg_exists_qry := msg_exists_qry || 'when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then exists(select * from mbus.qt$' || r.qname || ' q where q.iid=$1 and not mbus.build_' || r.qname ||'_record_consumer_list(row(q.*)::mbus.qt_model) <@ q.received)'||chr(10);
