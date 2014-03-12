@@ -311,6 +311,20 @@ language plpgsql;
 
 create or replace function mbus._create_consumer_role(qname text, cname text) returns void as
 $code$
+/*
+-->>>
+ begin
+  perform mbus.create_queue('qzqn1',32);
+  if not exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_post_qzqn1') then
+    raise exception 'Expected role % does not found', 'mbus_' || current_catalog || '_post_qzqn1';
+  end if;
+
+  if not exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_consume_qzqn1_by_default') then
+    raise exception 'Expected role % does not found', 'mbus_' || current_catalog || '_consume_q1_by_default';
+  end if;
+ end;
+--<<<
+*/
 begin
   if cname ~ $RE$\W$RE$ or length(cname)>32 then
       raise exception 'Wrong consumer name:%', cname;
@@ -333,6 +347,9 @@ language plpgsql;
 
 create or replace function mbus._create_queue_role(qname text) returns void as
 $code$
+/*
+
+*/
 begin
   if qname ~ $RE$\W$RE$ or length(qname)>32 then
       raise exception 'Wrong queue name:%', qname;
@@ -1335,6 +1352,31 @@ $_$;
 CREATE FUNCTION drop_queue(qname text) RETURNS void
     LANGUAGE plpgsql
     AS $_X$
+/*
+do $thecode$
+-->>>Drop queue
+ declare
+  cnt integer;
+ begin
+   perform mbus.create_queue('zzqn122',32);
+   perform mbus.drop_queue('zzqn122');
+   if exists(select * from information_schema.tables where table_schema='mbus' and table_name='qt$zzqn122') then
+     raise exception 'Table has been left after queue was dropped';
+   end if;
+   execute mbus.string_format($SQL$select count(*) from information_schema.applicable_roles where role_name='mbus_%<db>_post_zzqn122'$SQL$, hstore('db', current_catalog))
+     into cnt;
+   if cnt>0 then
+     raise exception 'Role for posters has been left after queue was dropped';
+   end if;
+   execute mbus.string_format($SQL$select count(*) from information_schema.applicable_roles where role_name like 'mbus_%<db>_consume_zzqn122_by%'$SQL$, hstore('db', current_catalog))
+     into cnt;
+   if cnt>0 then
+     raise exception 'Role for posters has been left after queue was dropped';
+   end if;
+ end;
+ --<<<
+ $thecode$;
+*/
 declare
  r record;
 begin
@@ -1400,7 +1442,7 @@ CREATE FUNCTION drop_trigger(src text, dst text) RETURNS void
     begin
       execute 'drop function mbus.trigger_' || src || '_to_' || dst ||'(mbus.qt_model)';
     exception
-     when sqlstate '42000' then null;
+     when sqlstate '42000' then null; --syntax error - skip it
     end;
   end if;
  end;
@@ -1526,7 +1568,7 @@ CREATE FUNCTION post_temp(tqname text, data hstore, headers hstore DEFAULT NULL:
                                 $4,
                                 coalesce($5, now() - '1h'::interval),
                                 $6, 
-                                now(), 
+                                coalesce((headers->'enqueue_time')::timestamp,now()), 
                                 current_database() || '.' || nextval('mbus.seq'), 
                                 array[]::int[] 
                                ) returning iid;
@@ -2110,8 +2152,8 @@ create or replace function test_a_routine(fname text) returns
   end;
   --<<<
 
-  Все тесты для одной функции выполняются в одной транзакции; после выполнения тестов одной функции транзакция для
-  проведения тестов для этой функции откатывается; по завершении всех тестов откатывается общая транзакция.
+  Все тесты для одной функции выполняются в одной транзакции; после выполнения тестов для этой функции транзакция для
+  нее откатывается; таким образом, по завершению всех тестов откатываются все транзакции.
 */
 declare
  src text;
