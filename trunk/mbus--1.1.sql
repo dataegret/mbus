@@ -313,7 +313,9 @@ language plpgsql;
 create or replace function mbus._create_consumer_role(qname text, cname text) returns void as
 $code$
 /*
--->>>
+-->>>Check for roles after queue creation
+ declare
+  fail_but_ok boolean;
  begin
   perform mbus.create_queue('qzqn1',32);
   if not exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_post_qzqn1') then
@@ -322,6 +324,18 @@ $code$
 
   if not exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_consume_qzqn1_by_default') then
     raise exception 'Expected role % does not found', 'mbus_' || current_catalog || '_consume_q1_by_default';
+  end if;
+  fail_but_ok:=false;
+  begin
+     perform mbus.create_queue('qzqn-1',32);
+  exception
+   when others then
+     if sqlerrm like '%'||'qzqn-1'||'%' then
+       fail_but_ok:=true;
+     end if;
+  end;
+  if not fail_but_ok then
+    raise exception 'Can create queue with wrong name';
   end if;
  end;
 --<<<
@@ -370,6 +384,48 @@ language plpgsql;
 
 create or replace function mbus._drop_consumer_role(qname text, cname text) returns void as
 $code$
+/*
+do $thetest$
+-->>>Check for roles after queue creation
+ declare
+  fail_but_ok boolean;
+ begin
+  perform mbus.create_queue('qzqn1',32);
+  if not exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_post_qzqn1') then
+    raise exception 'Expected role % does not found', 'mbus_' || current_catalog || '_post_qzqn1';
+  end if;
+
+  if not exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_consume_qzqn1_by_default') then
+    raise exception 'Expected role % does not found', 'mbus_' || current_catalog || '_consume_q1_by_default';
+  end if;
+  fail_but_ok:=false;
+  begin
+     perform mbus._drop_consumer_role('qzqnx1','default');
+  exception
+   when sqlstate '42704' then
+       fail_but_ok:=true;
+  end;
+  if not fail_but_ok then
+    raise exception 'Can create queue with wrong name';
+  end if;
+ end;
+--<<<
+$thetest$;
+
+do $thetest$
+-->>>test actual role drops
+ begin
+  begin
+    perform mbus._drop_consumer_role('qzqn1','default');
+    raise sqlstate 'RB999';
+  exception
+    when sqlstate 'RB999' then null;
+    when others then raise;
+  end;
+ end;
+--<<<
+$thetest$;
+*/
 begin
   if cname ~ $RE$\W$RE$ or length(cname)>32 then
       raise exception 'Wrong consumer name:%', cname;
@@ -381,6 +437,48 @@ language plpgsql;
 
 create or replace function mbus._drop_queue_role(qname text) returns void as
 $code$
+/*
+do $thetest$
+-->>>Check for roles after queue creation
+ declare
+  fail_but_ok boolean;
+ begin
+  perform mbus.create_queue('qzqn1',32);
+  if not exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_post_qzqn1') then
+    raise exception 'Expected role % does not found', 'mbus_' || current_catalog || '_post_qzqn1';
+  end if;
+
+  if not exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_consume_qzqn1_by_default') then
+    raise exception 'Expected role % does not found', 'mbus_' || current_catalog || '_consume_q1_by_default';
+  end if;
+  fail_but_ok:=false;
+  begin
+     perform mbus._drop_queue_role('qzqnx1');
+  exception
+   when sqlstate '42704' then
+       fail_but_ok:=true;
+  end;
+  if not fail_but_ok then
+    raise exception 'Can create queue with wrong name';
+  end if;
+ end;
+--<<<
+
+-->>>test actual role drops
+ begin
+  perform mbus._drop_queue_role('qzqn1');
+  if exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_post_qzqn1') then
+    raise exception 'Unexpected role % have been found', 'mbus_' || current_catalog || '_post_qzqn1';
+  end if;
+
+  if exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_consume_qzqn1_by_default') then
+    raise exception 'Unexpected role % have been found', 'mbus_' || current_catalog || '_consume_q1_by_default';
+  end if;
+ end;
+--<<<
+$thetest$;
+*/
+
 declare
  r record;
 begin
@@ -436,6 +534,9 @@ select string_format($$%"name" == %{name} is %[value] == %'value' and n=%<n> and
      array[$STR$%'username'$STR$,$STR$username=>"username"$STR$,$STR$'username'$STR$],
      array[$STR$%[username]Q$STR$,$STR$username=>"username"$STR$,$STR$'username'Q$STR$],
      
+     array[$STR$%<username>$STR$,$STR$username=>"user name"$STR$,$STR$user name$STR$],
+     array[$STR$--%<username>--Q$STR$,$STR$username=>">user name<"$STR$,$STR$-->user name<--Q$STR$],
+
      array[$STR$%<username>Q$STR$,$STR$username=>"user name"$STR$,$STR$user nameQ$STR$],
      array[$STR$%#gt#%#lt#%#amp#Q$STR$,$STR$gt=>">",lt=>"<",amp=>"&"$STR$,$STR$&gt;&lt;&amp;Q$STR$]
    ];
@@ -962,7 +1063,7 @@ declare
 	is_clean_creation boolean := false;
 begin
 	if length(qname)>32 or qname ~ $RE$\W$RE$ then
-	   raise exception 'Name % too long (32 chars max)', qname;
+	   raise exception 'Name % too long (32 chars max) or contains illegal chars', qname;
 	end if;
 	--qname:=lower(qname);
 	if not exists(select * from mbus.queue q where q.qname=create_queue.qname) then
