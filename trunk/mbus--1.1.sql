@@ -155,13 +155,12 @@ CREATE INDEX tempq_name_added ON tempq USING btree (((headers -> 'tempq'::text))
 create or replace function owner_set(c_uname text default NULL) returns void as
 $code$
 declare 
-	c_rolename text;
+	r_role RECORD;
 begin
 	if c_uname is not null then
 		alter function mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean) SECURITY DEFINER;
-		for c_rolename in select rolname from pg_catalog.pg_roles where rolsuper = false 
-		loop
-			revoke EXECUTE on  function mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean) from c_rolename;
+		for r_role in select * from pg_catalog.pg_roles where rolsuper = false loop
+			revoke EXECUTE on  function mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean) from r_role.rolname;
 		end loop;
 		grant EXECUTE on  function mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean) to c_uname;
 	else
