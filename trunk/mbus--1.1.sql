@@ -152,6 +152,16 @@ ALTER TABLE ONLY trigger
 
 CREATE INDEX tempq_name_added ON tempq USING btree (((headers -> 'tempq'::text)), added) WHERE ((headers -> 'tempq'::text) IS NOT NULL);
 
+create or replace function owner_set(c_uname text default NULL)
+returns void
+$code$
+begin
+	raise notice 'test %', c_uname;
+end;
+$code$
+language plpgsql;
+
+
 create or replace function _is_superuser() returns boolean as
 $code$
 /*
