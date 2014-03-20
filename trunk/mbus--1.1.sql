@@ -158,7 +158,7 @@ declare
 	c_rolename text;
 begin
 	if c_uname is not null then
-		alter function mbust.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean) SECURITY DEFINER;
+		alter function mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean) SECURITY DEFINER;
 		for c_rolename in select rolname from pg_catalog.pg_roles where rolsuper = false 
 		loop
 			revoke EXECUTE on  function mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean) from c_rolename;
