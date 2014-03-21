@@ -162,7 +162,7 @@ begin
 		for r_role in select * from pg_catalog.pg_roles where rolsuper = false loop
 			execute 'revoke EXECUTE on  function mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean) from ' || r_role.rolname;
 		end loop;
-		grant EXECUTE on  function mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean) to c_uname;
+		execute 'grant EXECUTE on  function mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean) to ' || c_uname;
 	else
 		alter function mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean) SECURITY invoker;
 	end if;
