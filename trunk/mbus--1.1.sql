@@ -290,7 +290,7 @@ begin
 end;
 --<<<
 */
-  select mbus._is_superuser() 
+  select mbus._is_mbus_admin()
     or exists(select schema_owner from information_schema.schemata where schema_name='mbus' and schema_owner=session_user) or mbus.raise_exception('Access denied') is not null;
 $code$
 language sql;
