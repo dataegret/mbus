@@ -2445,4 +2445,11 @@ alter extension mbus drop sequence seq;
 alter extension mbus drop sequence qt_model_id_seq;
 alter extension mbus drop sequence consumer_id_seq;
 alter extension mbus drop sequence queue_id_seq;
+
+do $role$
+begin
+  execute 'drop role if exists mbus_' || current_database() || '_admin';
+  execute 'create role mbus_' || current_database() || '_admin';
+end;
+$role$;
 grant usage on schema mbus to public;
