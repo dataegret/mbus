@@ -202,6 +202,22 @@ $code$
 $code$
 language sql;
 
+create or replace function mbus._is_mbus_admin(qname text, cname text default 'default') returns boolean as
+$code$
+/*
+-->>>Run it as mbus_admin
+begin
+   if not mbus._is_mbus_admin() then
+     raise exception 'Not admin';     
+   end if;
+end;
+--<<<
+*/
+   select mbus._is_superuser() or pg_has_role(session_user,'mbus_' || current_database() || '_admin','usage')::boolean;
+$code$
+language sql;
+
+
 create or replace function mbus.can_consume(qname text, cname text default 'default') returns boolean as
 $code$
 /*
