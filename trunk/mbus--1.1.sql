@@ -186,6 +186,14 @@ end;
 $code$
 language plpgsql;
 
+create or replace function raise_exception(exc text) returns void as
+$code$
+ begin
+  raise exception '%', exc;
+ end;
+$code$
+language plpgsql;
+
 
 create or replace function _is_superuser() returns boolean as
 $code$
@@ -202,18 +210,19 @@ $code$
 $code$
 language sql;
 
-create or replace function mbus._is_mbus_admin(qname text, cname text default 'default') returns boolean as
+create or replace function mbus._is_mbus_admin() returns boolean as
 $code$
 /*
 -->>>Run it as mbus_admin
 begin
+   perform mbus.create_queue('zzqqq1',128);
    if not mbus._is_mbus_admin() then
      raise exception 'Not admin';     
    end if;
 end;
 --<<<
 */
-   select mbus._is_superuser() or pg_has_role(session_user,'mbus_' || current_database() || '_admin','usage')::boolean;
+   select mbus._is_superuser() or pg_has_role(session_user,'mbus_' || current_database() || '_admin','usage');
 $code$
 language sql;
 
@@ -305,10 +314,43 @@ end;
 $code$
 language plpgsql;
 
-create or replace function mbus._should_be_able_to_post(qname text) returns void as
+create or replace function mbus._should_be_owner_or_root() returns boolean as
 $code$
 /*
--->>>Create ordinal queue
+-->>>_should_be_owner_or_root
+begin
+  perform mbus.create_queue('qxz1',128);
+  perform mbus._should_be_owner_or_root();
+end;
+--<<<
+*/
+  select mbus._is_superuser() 
+    or exists(select schema_owner from information_schema.schemata where schema_name='mbus' and schema_owner=session_user) or mbus.raise_exception('Access denied') is not null;
+$code$
+language sql;
+
+create or replace function mbus._should_be_authorized(qname text) returns boolean as
+$code$
+/*
+-->>>_should_be_authorized
+begin
+  perform mbus.create_queue('qxz1',128);
+  perform mbus._should_be_authorized('qxz1');
+end;
+--<<<
+*/
+  select mbus._is_superuser() 
+    or exists(select schema_owner from information_schema.schemata where schema_name='mbus' and schema_owner=session_user) or 
+    pg_has_role(session_user, 'mbus_' || current_database() || '_admin_' || qname, 'usage')
+    or mbus.raise_exception('Access denied') is not null;
+$code$
+language sql;
+
+  
+create or replace function mbus._should_be_able_to_post(qname text) returns boolean as
+$code$
+/*
+-->>>_should_be_able_to_post
 begin
   perform mbus.create_queue('qxz1',128);
   create role atestrole2 login;
@@ -351,14 +393,9 @@ end;
 --<<<
 $code2$
 */
-
-begin
-  if not mbus._is_superuser() and not mbus.can_post(qname) then
-    raise exception 'Access denied';
-  end if;
-end;
+  select mbus._is_superuser() or mbus.can_post(qname) or mbus.raise_exception('Access denied') is not null;
 $code$
-language plpgsql;
+language sql;
 
 
 create or replace function mbus._create_consumer_role(qname text, cname text) returns void as
@@ -428,6 +465,14 @@ begin
       then 
        raise notice 'Role mbus_post_% already exists', qname;
   end;
+
+  begin
+    execute 'create role mbus_' || current_database() || '_admin_' || qname;
+  exception
+   when sqlstate '42710' -- "role already exists
+      then 
+       raise notice 'Role mbus_post_% already exists', qname;
+  end;
 end;
 $code$
 language plpgsql;
@@ -440,6 +485,7 @@ do $thetest$
 -->>>Check for roles after queue creation
  declare
   fail_but_ok boolean;
+  errm text;
  begin
   perform mbus.create_queue('qzqn1',32);
   if not exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_post_qzqn1') then
@@ -450,16 +496,7 @@ do $thetest$
     raise exception 'Expected role % does not found', 'mbus_' || current_catalog || '_consume_q1_by_default';
   end if;
   fail_but_ok:=false;
-  begin
-     perform mbus._drop_consumer_role('qzqnx1','default');
-  exception
-   when sqlstate '42704' then
-       fail_but_ok:=true;
-  end;
-  if not fail_but_ok then
-    raise exception 'Can create queue with wrong name';
-  end if;
- end;
+end;
 --<<<
 $thetest$;
 
@@ -481,7 +518,7 @@ begin
   if cname ~ $RE$\W$RE$ or length(cname)>32 then
       raise exception 'Wrong consumer name:%', cname;
   end if;
-  execute 'drop role mbus_' || current_database() || '_consume_' || qname || '_by_' || cname;
+  execute 'drop role if exists mbus_' || current_database() || '_consume_' || qname || '_by_' || cname;
 end;
 $code$
 language plpgsql;
@@ -493,6 +530,7 @@ do $thetest$
 -->>>Check for roles after queue creation
  declare
   fail_but_ok boolean;
+  errm text;
  begin
   perform mbus.create_queue('qzqn1',32);
   if not exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_post_qzqn1') then
@@ -502,16 +540,7 @@ do $thetest$
   if not exists(select * from information_schema.enabled_roles where role_name='mbus_' || current_catalog || '_consume_qzqn1_by_default') then
     raise exception 'Expected role % does not found', 'mbus_' || current_catalog || '_consume_q1_by_default';
   end if;
-  fail_but_ok:=false;
-  begin
-     perform mbus._drop_queue_role('qzqnx1');
-  exception
-   when sqlstate '42704' then
-       fail_but_ok:=true;
-  end;
-  if not fail_but_ok then
-    raise exception 'Can create queue with wrong name';
-  end if;
+
  end;
 --<<<
 
@@ -533,7 +562,8 @@ $thetest$;
 declare
  r record;
 begin
-  execute 'drop role mbus_' || current_database() || '_post_' || qname;
+  execute 'drop role if exists mbus_' || current_database() || '_post_' || qname;
+  execute 'drop role if exists mbus_' || current_database() || '_admin_' || qname;
 
   for r in select * from mbus.consumer c where c.qname=_drop_queue_role.qname loop
     begin
@@ -641,14 +671,6 @@ $BODY$
 
 --' - single quote here is just for correct text highlight of colororer
 
-create or replace function raise_exception(exc text) returns void as
-$code$
- begin
-  raise exception '%', exc;
- end;
-$code$
-language plpgsql;
-
 
 CREATE FUNCTION clear_tempq() 
 RETURNS void
@@ -664,34 +686,17 @@ AS $$
 --<<<
 */
 begin
+    perform mbus._should_be_owner_or_root();
 	delete from mbus.trigger where dst like 'temp.%' and not exists (select * from pg_stat_activity where dst like 'temp.' || md5(pid::text || backend_start::text) || '%');
 	delete from mbus.tempq where not exists (select * from pg_stat_activity where (headers->'tempq') like 'temp.' || md5(pid::text || backend_start::text) || '.%');
 end;
-$$;
+$$
+security definer set search_path = mbus, pg_temp, public;
 
 CREATE FUNCTION consume(qname text, cname text DEFAULT 'default'::text) 
 RETURNS SETOF qt_model
 LANGUAGE plpgsql
 AS $_$
-/*
--->>>Will try to consume unexisted queue
-declare
-  failed_but_ok boolean;
-begin
-  begin
-    perform mbus.consume('zzzqqqq');
-  exception
-    when others then
-      if sqlerrm like '%queue%were%defined%' then
-        failed_but_ok:=true;
-      end if;
-  end;
-  if not failed_but_ok then
-    raise exception 'Can consumer from unexisted queue';
-  end if;
-end;
---<<<
-*/
 begin
 	if qname like 'temp.%' then
         	return query select * from mbus.consume_temp(qname);
@@ -738,8 +743,26 @@ $$;
 CREATE FUNCTION create_consumer(cname text, qname text, p_selector text DEFAULT NULL::text, noindex boolean DEFAULT false)
 RETURNS void
 LANGUAGE plpgsql
+security definer set search_path = mbus, pg_temp, public
 AS $_$
 <<code>>
+/*
+-->>>create_consumer
+ declare
+  iid text;
+  rv mbus.qt_model;
+ begin
+   perform mbus.create_queue('zzqqx',12);
+   perform mbus.create_consumer('zqqzz','zzqqx');
+   iid:=mbus.post('zzqqx',hstore('key','value'));
+   rv:=mbus.peek(iid);
+   rv:=mbus.take(iid);
+   if (rv.data->'key')<>'value' then
+     raise exception 'Cannot take!';
+   end if;
+ end;
+--<<<
+*/
 declare
 	c_id integer;
 	cons_src text;
@@ -750,6 +773,7 @@ declare
 	nowtime text:=(now()::text)::timestamp without time zone;
 	is_roles_security_model boolean;
 begin
+        perform mbus._should_be_owner_or_root();
 	selector := case when p_selector is null or p_selector ~ '^ *$' then '1=1' else p_selector end;
         if not exists(select * from mbus.queue q where q.qname=create_consumer.qname) then
 	    raise exception 'Wrong queue name:%', create_consumer.qname;
@@ -946,8 +970,10 @@ $CONSN_SRC$;
  create or replace function mbus.take_from_<!qname!>_by_<!cname!>(msgid text)
   returns mbus.qt_model as
   $PRC$
+     <!should_be_able_to_consume!>
      update mbus.qt$<!qname!> t set received=received || <!consumer_id!> where iid=$1 and <!c_id!> <> ALL(received) returning *;
   $PRC$
+  <!SECURITY_DEFINER!>
   language sql;
  $TAKE$;
  take_src:=regexp_replace(take_src,'<!qname!>', qname, 'g');
@@ -955,6 +981,12 @@ $CONSN_SRC$;
  take_src:=regexp_replace(take_src,'<!consumers!>', (select consumers_cnt::text from mbus.queue q where q.qname=create_consumer.qname),'g');
  take_src:=regexp_replace(take_src,'<!consumer_id!>',c_id::text,'g');
  take_src:=regexp_replace(take_src,'<!c_id!>',c_id::text,'g');
+ take_src:=regexp_replace(take_src,'<!should_be_able_to_consume!>',
+                                    case when is_roles_security_model then $S$select mbus._should_be_able_to_consume('$S$ || qname || $S$','$S$ || cname || $S$');$S$ else '--' end
+                         );
+ take_src:=regexp_replace(take_src,'<!SECURITY_DEFINER!>',
+                                    case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp, public ' else '' end
+                         );
 
  execute take_src;
  
@@ -977,7 +1009,7 @@ end;
 $_$;
 
 
-CREATE FUNCTION create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean default null) 
+CREATE FUNCTION mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean default null) 
 RETURNS void
 LANGUAGE plpgsql
 AS $_$
@@ -1104,6 +1136,12 @@ AS $_$
  end;
  --<<<
 
+ -->>>Clear queue
+ begin
+   perform mbus.create_queue('zq_ordr',8);
+   perform mbus.clear_queue_zq_ordr();
+ end;
+ --<<<
 */
 declare
 	schname text:= 'mbus';
@@ -1113,6 +1151,7 @@ declare
 	is_roles_security_model boolean;
 	is_clean_creation boolean := false;
 begin
+        perform mbus._should_be_owner_or_root();
 	if length(qname)>32 or qname ~ $RE$\W$RE$ then
 	   raise exception 'Name % too long (32 chars max) or contains illegal chars', qname;
 	end if;
@@ -1180,30 +1219,46 @@ begin
 	declare
 		qry text;
 	begin
- 		select string_agg( 'select id from mbus.consumer where id=' || id::text ||' and ( (' || r.selector || ')' || (case when r.added is null then ')' else $$ and q.added > '$$ || (r.added::text) || $$'::timestamp without time zone)$$ end) ||chr(10), ' union all '||chr(10))
+        <!should_be_able_to_clear!>
+
+	select string_agg( 'select id from mbus.consumer where id=' || id::text ||' and ( (' || r.selector || ')' || (case when r.added is null then ')' else $$ and q.added >= '$$ || (r.added::text) || $$'::timestamp without time zone)$$ end) ||chr(10), ' union all '||chr(10))
   	into qry
   		from mbus.consumer r where qname='<!qname!>';
  	execute 'delete from mbus.qt$<!qname!> q where expires < now() or (received <@ array(' || qry || '))';
 	end; 
 	$ZZ$
 	language plpgsql
+        <!SECURITY_DEFINER!>
 	$CLR_SRC$;
 
  	clr_src:=regexp_replace(clr_src,'<!qname!>', qname, 'g');
- 	execute clr_src;
+        clr_src:=regexp_replace(clr_src,'<!should_be_able_to_clear!>',
+	                                   case when is_roles_security_model then $S$perform mbus._should_be_owner_or_root();$S$ else '--' end
+	                        );
+	clr_src:=regexp_replace(clr_src,'<!SECURITY_DEFINER!>',
+	                                   case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp, public ' else '' end
+	                        );
+        execute clr_src;
 
  	peek_src:=$PEEK$
   	create or replace function mbus.peek_<!qname!>(msgid text default null)
   	returns boolean as
   	$PRC$
    	select case 
-              when $1 is null then exists(select * from mbus.qt$<!qname!>)
+              when <!should_be_able_to_post!> is not null and $1 is null then exists(select * from mbus.qt$<!qname!>)
               else exists(select * from mbus.qt$<!qname!> where iid=$1)
         end;
   	$PRC$
   	language sql
+    <!SECURITY_DEFINER!>
  	$PEEK$;
  	peek_src:=regexp_replace(peek_src,'<!qname!>', qname, 'g');
+    peek_src:=regexp_replace(post_src,'<!should_be_able_to_post!>',
+	                                   case when is_roles_security_model then $S$select mbus._should_be_able_to_post('$S$ || qname || $S$');$S$ else '' end
+	                        );
+	peek_src:=regexp_replace(post_src,'<!SECURITY_DEFINER!>',
+	                                   case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp, public ' else '' end
+	                        );
  	execute peek_src;
  
  	perform mbus.create_consumer(cname:='default',qname:=qname, noindex:=not is_clean_creation);
@@ -1380,6 +1435,7 @@ $_$;
 
 
 CREATE FUNCTION create_view(qname text, cname text default 'default', sname text default 'public', viewname text default null) RETURNS void
+    security definer set search_path = mbus, pg_temp, public
     LANGUAGE plpgsql
     AS $_$
 /*
@@ -1403,6 +1459,7 @@ CREATE FUNCTION create_view(qname text, cname text default 'default', sname text
 declare
 	param hstore:=hstore('qname',qname)||hstore('cname',cname)|| hstore('sname',sname||'.')|| hstore('viewname', coalesce(viewname, 'public.'||qname));
 begin
+	perform mbus._should_be_owner_or_root();
 	execute mbus.string_format($STR$ create view %<sname>%<viewname> as select data from mbus.consume('%<qname>', '%<cname>')$STR$, param);
 	execute mbus.string_format($STR$
 	create or replace function %<sname>trg_post_%<viewname>() returns trigger as
@@ -1423,11 +1480,13 @@ $_$;
 
 
 CREATE FUNCTION create_view_prop(qname text, cname text, sname text, viewname text, with_delay boolean default false, with_expire boolean default false) RETURNS void
+    security definer set search_path = mbus, pg_temp, public
     LANGUAGE plpgsql
     AS $_$
 declare
 	param hstore := hstore('qname',qname)||hstore('cname',cname)|| hstore('sname',sname||'.')|| hstore('viewname', coalesce(viewname, 'public.'||qname));
 begin
+        perform mbus._should_be_owner_or_root();
 	execute mbus.string_format($STR$ create view %<sname>%<viewname> as select data, properties, delayed_until, expires from mbus.consume('%<qname>', '%<cname>')$STR$, param);
 	execute mbus.string_format($STR$
 	create or replace function %<sname>trg_post_%<viewname>() returns trigger as
@@ -1448,6 +1507,7 @@ $_$;
 
 create or replace function queue_acl( oper text, usr text, qname text, viewname text, schemaname text)
 returns void 
+security definer set search_path = mbus, pg_temp, public
 language plpgsql as
 $_$
 declare
@@ -1457,6 +1517,7 @@ begin
 /*
 
 */
+        perform mbus._should_be_owner_or_root();
 	if lower(oper) = 'grant' then
 		param := param || hstore('dir', 'to');
 	elsif lower(oper) = 'revoke' then
@@ -1487,9 +1548,11 @@ $_$;
 
 
 CREATE FUNCTION drop_consumer(cname text, qname text) RETURNS void
+    security definer set search_path = mbus, pg_temp, public
     LANGUAGE plpgsql
     AS $_$
  begin
+   perform mbus._should_be_owner_or_root();
    delete from mbus.consumer c where c.name=drop_consumer.cname and c.qname=drop_consumer.qname;
    execute 'drop index mbus.qt$' || qname || '_for_' || cname;
    execute 'drop function mbus.consume_' || qname || '_by_' || cname || '()';
@@ -1503,6 +1566,7 @@ $_$;
 
 
 CREATE FUNCTION drop_queue(qname text) RETURNS void
+    security definer set search_path = mbus, pg_temp, public
     LANGUAGE plpgsql
     AS $_X$
 /*
@@ -1533,6 +1597,7 @@ do $thecode$
 declare
  r record;
 begin
+ perform mbus._should_be_owner_or_root();
  begin
    execute 'drop table mbus.qt$' || qname || ' cascade';
  exception
@@ -1587,9 +1652,11 @@ $_X$;
 
 
 CREATE FUNCTION drop_trigger(src text, dst text) RETURNS void
+    security definer set search_path = mbus, pg_temp, public
     LANGUAGE plpgsql
     AS $$
  begin
+  perform mbus._should_be_owner_or_root();
   delete from mbus.trigger where trigger.src=drop_trigger.src and trigger.dst=drop_trigger.dst;
   if found then
     begin
@@ -1635,6 +1702,7 @@ declare
  hash text:='_'||md5(coalesce(selector,''));
  is_rsm boolean :=false;
 begin
+ perform mbus._should_be_owner_or_root();
  if selector is null then
    selector:='(1=1)';
  end if;
@@ -1697,6 +1765,7 @@ $BODY$
   LANGUAGE plpgsql VOLATILE
   COST 100
   ROWS 1000
+  security definer set search_path = mbus, pg_temp, public
   set enable_seqscan=off;
 
 
@@ -2147,11 +2216,13 @@ begin
                     end or exists(select * from mbus.dmq q where q.iid=$1);
                 $code$
                 language sql
+                security definer
         $FUNC$;
 
         execute $FUNC$
                 create or replace function mbus.peek(msgiid text) returns mbus.qt_model as
                 $code$
+                 select mbus._should_be_able_to_consume(substring(msgiid from '^[^.]+'));
                  select coalesce(
                     case $FUNC$
                      || peek_qry ||
@@ -2161,6 +2232,7 @@ begin
                     end, (select row(q.*)::mbus.qt_model from mbus.dmq q where q.iid=$1));
                 $code$
                 language sql
+                security definer set search_path = mbus, pg_temp, public
         $FUNC$;
 
         execute $FUNC$
@@ -2169,6 +2241,7 @@ begin
                 declare
                   rv mbus.qt_model;
                 begin
+                 perform mbus._should_be_able_to_consume(substring(msgiid from '^[^.]+'));
                  perform pg_advisory_xact_lock( hashtext(msgiid));
                     case $FUNC$
                      || take_qry ||
@@ -2181,6 +2254,7 @@ begin
                 end;
                 $code$
                 language plpgsql
+                security definer set search_path = mbus, pg_temp, public
         $FUNC$;
 end if;
 
@@ -2209,11 +2283,31 @@ end if;
  end if;
 
  if consume_qry='' then 
-        execute $STR$create or replace function mbus.consume(qname text, cname text default 'default') returns setof mbus.qt_model as $code$ select mbus.raise_exception('No queues were defined'); select * from mbus.qt_model;$code$ language sql $STR$;
+        execute $STR$
+          create or replace function mbus.consume(qname text, cname text default 'default') returns setof mbus.qt_model as $code$ select mbus.raise_exception('No queues were defined'); select * from mbus.qt_model;$code$ language sql $STR$;
  else 
         execute $FUNC$
         create or replace function mbus.consume(qname text, cname text default 'default') returns setof mbus.qt_model as
         $QQ$
+          /*
+          -->>>Will try to consume unexisted queue
+          declare
+            failed_but_ok boolean;
+          begin
+            begin
+              perform mbus.consume('zzzqqqq');
+            exception
+              when others then
+                if sqlerrm like '%queue%were%defined%' then
+                  failed_but_ok:=true;
+                end if;
+            end;
+            if not failed_but_ok then
+              raise exception 'Can consumer from unexisted queue';
+            end if;
+          end;
+          --<<<
+          */
         begin
           if qname like 'temp.%' then
             return query select * from mbus.consume_temp(qname);
