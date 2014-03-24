@@ -159,12 +159,28 @@ declare
 begin
 	if c_uname is not null then
 		alter function mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean) SECURITY DEFINER;
+		alter function mbus.peek(msgiid text) SECURITY DEFINER;
+		alter function mbus.create_consumer(cname text, qname text, p_selector text, noindex boolean) SECURITY DEFINER;
+		alter function mbus.drop_queue(qname text) SECURITY DEFINER;
+		alter function mbus.drop_consumer(cname text,qname text) SECURITY DEFINER;
 		for r_role in select * from pg_catalog.pg_roles where rolsuper = false loop
 			execute 'revoke EXECUTE on  function mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean) from ' || r_role.rolname;
+			execute 'revoke EXECUTE on  function mbus.peek(msgiid text) from ' || r_role.rolname;
+			execute 'revoke EXECUTE on  function mbus.create_consumer(cname text, qname text, p_selector text, noindex boolean) from ' || r_role.rolname;
+			execute 'revoke EXECUTE on  function mbus.drop_queue(qname text) from ' || r_role.rolname;
+			execute 'revoke EXECUTE on  function mbus.drop_consumer(cname text,qname text) from ' || r_role.rolname;
 		end loop;
 		execute 'grant EXECUTE on  function mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean) to ' || c_uname;
+		execute 'grant EXECUTE on  function mbus.peek(msgiid text) to ' || c_uname;
+		execute 'grant EXECUTE on  function mbus.create_consumer(cname text, qname text, p_selector text, noindex boolean) to ' || c_uname;
+		execute 'grant EXECUTE on  function mbus.drop_queue(qname text) to ' || c_uname;
+		execute 'grant EXECUTE on  function mbus.drop_consumer(cname text,qname text) to ' || c_uname;
 	else
 		alter function mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean) SECURITY invoker;
+		alter function mbus.peek(msgiid text) SECURITY invoker;
+		alter function mbus.create_consumer(cname text, qname text, p_selector text, noindex boolean) SECURITY invoker;
+		alter function mbus.drop_queue(qname text) SECURITY invoker;
+		alter function mbus.drop_consumer(cname text,qname text) SECURITY invoker;
 	end if;
 end;
 $code$
