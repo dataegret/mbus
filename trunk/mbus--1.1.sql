@@ -198,13 +198,27 @@ language plpgsql;
 create or replace function _is_superuser() returns boolean as
 $code$
 /*
+do $testcode$
 -->>>Run it as superuser
  begin
    if not mbus._is_superuser() then
      raise exception 'Not superuser';     
    end if;
+ perform dblink_exec('host=localhost port=5432 dbname=wrk user=mbuser password=mbuser',
+                     $DBLINKEXEC$
+      do $remote$
+        begin
+           perform mbus.create_queue('zzzxxxxq',12);
+           raise sqlstate 'RB999';
+          exception 
+            when sqlstate 'RB999' then null;
+        end;
+      $remote$;
+    $DBLINKEXEC$
+  );
  end;
 --<<<
+$testcode$
 */
    select rolsuper from pg_catalog.pg_roles where rolname=session_user;
 $code$
@@ -1011,6 +1025,7 @@ $_$;
 
 CREATE FUNCTION mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean default null) 
 RETURNS void
+security definer set search_path = mbus, pg_temp, public
 LANGUAGE plpgsql
 AS $_$
 /*
