@@ -320,7 +320,8 @@ end;
 --<<<
 */
   select mbus._is_mbus_admin()
-    or exists(select schema_owner from information_schema.schemata where schema_name='mbus' and schema_owner=session_user) or mbus.raise_exception('Access denied') is not null;
+    or exists(select schema_owner from information_schema.schemata where schema_name='mbus' and schema_owner=session_user) 
+    or mbus.raise_exception('Access denied') is not null;
 $code$
 language sql;
 
@@ -458,6 +459,7 @@ begin
        raise notice 'Role % already exists', cname;
   end;
   execute 'grant mbus_' || current_database() || '_consume_' || qname || '_by_' || cname || ' to mbus_' || current_database() || '_admin_' || qname || ' with admin option';
+  execute 'grant mbus_' || current_database() || '_consume_' || qname || '_by_' || cname || ' to mbus_' || current_database() || '_admin with admin option';
 end;
 $code$
 language plpgsql;
@@ -488,7 +490,7 @@ begin
        raise notice 'Role mbus_post_% already exists', qname;
   end;
   execute 'grant mbus_' || current_database() || '_post_' || qname || ' to mbus_' || current_database() || '_admin_' || qname || ' with admin option';
-
+  execute 'grant mbus_' || current_database() || '_post_' || qname || ' to mbus_' || current_database() || '_admin with admin option';
 end;
 $code$
 language plpgsql;
@@ -1273,7 +1275,7 @@ begin
  	$PEEK$;
  	peek_src:=regexp_replace(peek_src,'<!qname!>', qname, 'g');
     peek_src:=regexp_replace(post_src,'<!should_be_able_to_post!>',
-	                                   case when is_roles_security_model then $S$select mbus._should_be_able_to_post('$S$ || qname || $S$');$S$ else '' end
+	                                   case when is_roles_security_model then $S$select mbus._should_be_able_to_post('$S$ || qname || $S$');$S$ else $S$''$S$ end
 	                        );
 	peek_src:=regexp_replace(post_src,'<!SECURITY_DEFINER!>',
 	                                   case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp, public ' else '' end
