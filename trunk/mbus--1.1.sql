@@ -200,15 +200,28 @@ $code$
 /*
 do $testcode$
 -->>>Run it as superuser
+ declare
+  rootconn text:='host=localhost port=5432 dbname=wrk user=postgres password=postgres';
+  conn text:='host=localhost port=5432 dbname=wrk user=qqqzzz password=zzzqqq';
  begin
    if not mbus._is_superuser() then
      raise exception 'Not superuser';     
    end if;
- perform dblink_exec('host=localhost port=5432 dbname=wrk user=mbuser password=mbuser',
+
+   perform dblink_exec(rootconn, $QQ$drop role if exists qqqzzz$QQ$);
+   perform dblink_exec(rootconn, $QQ$create role qqqzzz with unencrypted password 'zzzqqq' login$QQ$);
+
+   perform * from dblink(rootconn, $QQ$select mbus.create_queue('zzzxxxxq',12);$QQ$) as (r text);
+   perform dblink_exec(rootconn, 'grant mbus_' || current_database() || '_admin_zzzxxxxq to qqqzzz with admin option');
+
+   perform dblink_exec(rootconn, $QQ$drop role if exists qqqzzz2$QQ$);
+   perform dblink_exec(rootconn, $QQ$create role qqqzzz2 with unencrypted password 'zzzqqq' login$QQ$);
+   perform dblink_exec(rootconn, $QQ$grant mbus_$QQ$ || current_database() || $QQ$_admin to qqqzzz$QQ$);
+   perform dblink_exec(conn,
                      $DBLINKEXEC$
       do $remote$
-        begin
-           perform mbus.create_queue('zzzxxxxq',12);
+        begin          
+           grant mbus_$DBLINKEXEC$ || current_database() || $DBLINKEXEC$_consume_zzzxxxxq_by_default to qqqzzz2;
            raise sqlstate 'RB999';
           exception 
             when sqlstate 'RB999' then null;
@@ -216,9 +229,11 @@ do $testcode$
       $remote$;
     $DBLINKEXEC$
   );
+   perform dblink_exec(rootconn, $QQ$drop role qqqzzz$QQ$);
+   perform dblink_exec(rootconn, $QQ$drop role qqqzzz2$QQ$);
  end;
 --<<<
-$testcode$
+$testcode$;
 */
    select rolsuper from pg_catalog.pg_roles where rolname=session_user;
 $code$
@@ -441,6 +456,24 @@ $code$
   end if;
  end;
 --<<<
+
+do $testcode$
+-->>>Run 
+ declare
+  conn text:='host=localhost port=5432 dbname=wrk user=%<login> password=%<password>';
+ begin
+   create role qzzq unencrypted password 'lala' login;
+   create role qzzq2 unencrypted password 'lala' login;
+   perform mbus.create_queue('qqzzxx',12);
+   execute 'create role mbus_' || current_database() || '_admin_qqzzxx';
+   execute 'grant mbus_' || current_database() || '_admin_qqzzxx to qzzq';
+   dblink_exec(conn, mbus.string_format($REMOTE$
+     begin
+       grant mbus_%<curdb>_qqzzxx to qzzq2;
+     end;
+   $REMOTE$, hstore(array['login', 'qzzq', 'password', 'lala', 'curdb', current_database()]);
+ end;
+$testcode$
 */
 begin
   if cname ~ $RE$\W$RE$ or length(cname)>32 then
@@ -458,6 +491,7 @@ begin
       then 
        raise notice 'Role % already exists', cname;
   end;
+  execute 'grant mbus_' || current_database() || '_consume_' || qname || '_by_' || cname || ' to mbus_' || current_database() || '_admin_' || qname || ' with admin option';
 end;
 $code$
 language plpgsql;
@@ -487,6 +521,8 @@ begin
       then 
        raise notice 'Role mbus_post_% already exists', qname;
   end;
+  execute 'grant mbus_' || current_database() || '_post_' || qname || ' to mbus_' || current_database() || '_admin_' || qname || ' with admin option';
+
 end;
 $code$
 language plpgsql;
@@ -1029,6 +1065,7 @@ security definer set search_path = mbus, pg_temp, public
 LANGUAGE plpgsql
 AS $_$
 /*
+do $testcode$
  -->>>Queue&consumer creation/drop and simple post in it; consume after; ensure roles would have been created
  declare
   h hstore;
@@ -1125,6 +1162,7 @@ AS $_$
 
  end;
  --<<<
+ $testcode$;
 
  -->>>Ordering test
  declare
