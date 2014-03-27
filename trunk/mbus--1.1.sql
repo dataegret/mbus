@@ -234,7 +234,9 @@ begin
 end;
 --<<<
 */
-   select mbus._is_superuser() or pg_has_role(session_user,'mbus_' || current_database() || '_consume_' || $1 || '_by_' || $2,'usage')::boolean;
+   select mbus._is_mbus_admin()
+          or pg_has_role(session_user,'mbus_' || current_database() || '_consume_' || $1 || '_by_' || $2,'usage')::boolean
+          or pg_has_role(session_user,'mbus_' || current_database() || '_admin_' || $1,'usage')::boolean;
 $code$
 language sql;
 
@@ -250,7 +252,9 @@ begin
 end;
 --<<<
 */
-   select mbus._is_superuser() or pg_has_role(session_user,'mbus_' || current_database() || '_post_' || $1,'usage')::boolean;
+   select mbus._is_mbus_admin()
+          or pg_has_role(session_user,'mbus_' || current_database() || '_post_' || $1,'usage')::boolean
+          or pg_has_role(session_user,'mbus_' || current_database() || '_admin_' || $1,'usage')::boolean;
 $code$
 language sql;
 
