@@ -194,6 +194,12 @@ $code$
 $code$
 language plpgsql;
 
+create or replace function mbus.is_roles_security_model(qname text) returns boolean as
+$code$
+ select is_roles_security_model from mbus.queue q where q.qname=is_roles_security_model.qname;
+$code$
+language sql
+security definer set search_path = mbus, pg_temp, public;
 
 create or replace function _is_superuser() returns boolean as
 $code$
@@ -268,7 +274,7 @@ begin
 end;
 --<<<
 */
-   select (select not is_roles_security_model from mbus.queue q where q.qname=can_post.qname)
+   select not mbus.is_roles_security_model(qname)
           or mbus._is_mbus_admin()
           or pg_has_role(session_user,'mbus_' || current_database() || '_consume_' || $1 || '_by_' || $2,'usage')::boolean
           or pg_has_role(session_user,'mbus_' || current_database() || '_admin_' || $1,'usage')::boolean;
@@ -287,7 +293,7 @@ begin
 end;
 --<<<
 */
-   select (select not is_roles_security_model from mbus.queue q where q.qname=can_post.qname)
+   select not mbus.is_roles_security_model(qname)
           or mbus._is_mbus_admin()
           or pg_has_role(session_user,'mbus_' || current_database() || '_post_' || $1,'usage')::boolean
           or pg_has_role(session_user,'mbus_' || current_database() || '_admin_' || $1,'usage')::boolean;
@@ -301,6 +307,7 @@ $code$
 -->>>Create ordinal queue
 begin
   perform mbus.create_queue('qxz1',128);
+  drop role if exists atestrole;
   create role atestrole login;
   set local session authorization atestrole;
   if has_table_privilege('mbus.qt$qxz1','SELECT') then
@@ -327,13 +334,12 @@ begin
       if sqlerrm like '%denied%' then
         failed_but_ok:=true;
       end if;
-      raise notice '************************ %', sqlerrm;
   end;
   if not failed_but_ok then
     raise exception 'Newly added user already can consume!';
   end if;
   reset session_authorization;
-  execute 'grant mbus_' || current_catalog || '_consume_qzx2_by_default to atestrole';
+  execute 'grant mbus_' || current_database() || '_consume_qzx2_by_default to atestrole';
 
   set local session authorization atestrole;
   perform mbus._should_be_able_to_consume('qzx2');
@@ -342,7 +348,7 @@ end;
 $code2$
 */
 begin
-  if not mbus._is_superuser() and not mbus.can_consume(qname, cname) then
+  if not mbus.can_consume(qname, cname) then
     raise exception 'Access denied';
   end if;
 end;
@@ -415,7 +421,6 @@ begin
       if sqlerrm like '%denied%' then
         failed_but_ok:=true;
       end if;
-      raise notice '************************ %', sqlerrm;
   end;
   if not failed_but_ok then
     raise exception 'Newly added user already can post!';
@@ -1303,21 +1308,21 @@ begin
 
  	peek_src:=$PEEK$
   	create or replace function mbus.peek_<!qname!>(msgid text default null)
-  	returns boolean as
+  	returns mbus.qt_model as
   	$PRC$
    	select case 
-              when <!should_be_able_to_post!> is not null and $1 is null then exists(select * from mbus.qt$<!qname!>)
-              else exists(select * from mbus.qt$<!qname!> where iid=$1)
+              when <!should_be_able_to_consume!> is not null and $1 is null then (select row(q.*)::mbus.qt_model from mbus.qt$<!qname!> q)
+              else (select row(q.*)::mbus.qt_model from mbus.qt$<!qname!> q where iid=$1)::mbus.qt_model
         end;
   	$PRC$
   	language sql
     <!SECURITY_DEFINER!>
  	$PEEK$;
  	peek_src:=regexp_replace(peek_src,'<!qname!>', qname, 'g');
-    peek_src:=regexp_replace(post_src,'<!should_be_able_to_post!>',
-	                                   case when is_roles_security_model then $S$select mbus._should_be_able_to_post('$S$ || qname || $S$');$S$ else $S$''$S$ end
+        peek_src:=regexp_replace(peek_src,'<!should_be_able_to_consume!>',
+	                                   case when is_roles_security_model then $S$mbus._should_be_able_to_consume('$S$ || qname || $S$')$S$ else $S$''$S$ end
 	                        );
-	peek_src:=regexp_replace(post_src,'<!SECURITY_DEFINER!>',
+	peek_src:=regexp_replace(peek_src,'<!SECURITY_DEFINER!>',
 	                                   case when is_roles_security_model then 'security definer set search_path = mbus, pg_temp, public ' else '' end
 	                        );
  	execute peek_src;
