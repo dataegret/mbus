@@ -268,7 +268,8 @@ begin
 end;
 --<<<
 */
-   select mbus._is_mbus_admin()
+   select (select not is_roles_security_model from mbus.queue q where q.qname=can_post.qname)
+          or mbus._is_mbus_admin()
           or pg_has_role(session_user,'mbus_' || current_database() || '_consume_' || $1 || '_by_' || $2,'usage')::boolean
           or pg_has_role(session_user,'mbus_' || current_database() || '_admin_' || $1,'usage')::boolean;
 $code$
@@ -286,7 +287,8 @@ begin
 end;
 --<<<
 */
-   select mbus._is_mbus_admin()
+   select (select not is_roles_security_model from mbus.queue q where q.qname=can_post.qname)
+          or mbus._is_mbus_admin()
           or pg_has_role(session_user,'mbus_' || current_database() || '_post_' || $1,'usage')::boolean
           or pg_has_role(session_user,'mbus_' || current_database() || '_admin_' || $1,'usage')::boolean;
 $code$
