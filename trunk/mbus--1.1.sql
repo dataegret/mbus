@@ -241,6 +241,7 @@ $code$
 -->>>Create ordinal queue
 begin
   perform mbus.create_queue('qxz1',128);
+  drop role if exists atestrole;
   create role atestrole login;
   set local session authorization atestrole;
   if has_table_privilege('mbus.qt$qxz1','SELECT') then
@@ -2342,7 +2343,97 @@ declare
 $code$
 language plpgsql;
 
+CREATE OR REPLACE FUNCTION mbus.escapechars(s text)
+  RETURNS text AS
+$BODY$
+select
+replace(
+  replace(
+    replace(
+      replace(
+        replace($1,chr(10),$S$\n$S$),
+              chr(9),$S$\t$S$),
+            chr(13),$S$\r$S$),
+          chr(8),$S$\b$S$),
+        chr(12),$S$\f$S$)
+$BODY$
+  LANGUAGE sql IMMUTABLE STRICT
+  COST 100;
 
+
+CREATE OR REPLACE FUNCTION mbus.hstore2json(hs hstore)
+  RETURNS text AS
+$BODY$
+/*
+do $CODE$
+-->>>hstore2json
+begin
+  if mbus.hstore2json(hstore('lala','dodo'))<>'{"lala":"dodo"}' or
+     mbus.hstore2json(hstore('lal"a','do"do')) <> $${"lal\"a":"do\"do"}$$ then
+       raise exception 'hstore2json is not passed:%', sqlerrm;
+  end if;
+end;
+--<<<
+$CODE$;
+*/
+declare
+rv text;
+r record;
+count integer;
+begin
+count:=0;
+rv:='';
+for r in (select key, val from each(hs) as h(key, val)) loop
+  if rv<>'' then
+   rv:=rv||',';
+  end if;
+  rv:=rv || '"'  || regexp_replace(regexp_replace(mbus.escapechars(coalesce(r.key,'')),$$\\$$,$$\\\\$$,'g'),'"', $$\"$$,'g') || '":';
+  --' just for colorer
+  rv:=rv || '"' || regexp_replace(regexp_replace(mbus.escapechars(coalesce(r.val,'')),$$\\$$,$$\\\\$$,'g'),'"', $$\"$$,'g') || '"';
+  --' just for colorer
+  count:=count+1;
+end loop;
+return '{'||rv||'}';
+end;
+$BODY$
+  LANGUAGE plpgsql IMMUTABLE
+  COST 100;
+
+
+CREATE OR REPLACE FUNCTION mbus.arrayofhstore2json(hs hstore[])
+  RETURNS text AS
+ $BODY$
+/*
+do $CODE$
+-->>>arrayofhstore2json
+begin
+  if mbus.arrayofhstore2json(array[hstore('lala','dodo'), hstore('dodo','lala')])<>'[{"lala":"dodo"},{"dodo":"lala"}]' then
+       raise exception 'hstore2json is not passed:%', sqlerrm;
+  end if;
+end;
+--<<<
+$CODE$
+*/
+   declare
+      i integer;
+      rv text;
+   begin
+     if hs is null or array_lower(hs,1) is null then
+        return 'null';
+     end if;
+     rv:='';
+     for i in array_lower(hs,1) .. array_upper(hs,1) loop
+        if rv<>'' then
+           rv:=rv||',';
+        end if;
+
+        rv:=rv || mbus.hstore2json(hs[i]);
+     end loop;
+     return '[' || rv || ']';
+   end;
+$BODY$
+  LANGUAGE plpgsql IMMUTABLE
+  COST 100;
 
 SELECT pg_catalog.pg_extension_config_dump('qt_model', '');
 SELECT pg_catalog.pg_extension_config_dump('consumer', '');
