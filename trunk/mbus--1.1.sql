@@ -913,7 +913,7 @@ begin
 	$DDD$
 	LANGUAGE plpgsql VOLATILE
 	<!SECURITY_DEFINER!>
-	SET enable_seqscan = off
+    SET enable_seqscan = off set enable_indexscan=on set enable_indexonlyscan=on
 	$CONS_SRC$; 
 
 	cons_src:=regexp_replace(cons_src,'<!qname!>', qname, 'g');
@@ -984,7 +984,6 @@ begin
                     and (<!selector!>)=true 
                     and added > '<!now!>' 
                     and coalesce(expires,'2070-01-01'::timestamp) > now()::timestamp 
-                    and t.iid not in (select a.iid from unnest(rvarr) as a)
                     and (not exist(t.headers,'consume_after') or (select every(not mbus.is_msg_exists(u.v)) from unnest( ((t.headers)->'consume_after')::text[]) as u(v)))
                     and pg_try_advisory_xact_lock(hashtext(t.iid))
                   order by added, delayed_until
@@ -1008,7 +1007,7 @@ end;
 $DDD$
 LANGUAGE plpgsql VOLATILE
 <!SECURITY_DEFINER!>
-SET enable_seqscan = off
+SET enable_seqscan = off set enable_indexscan=on set enable_indexonlyscan=on
 $CONSN_SRC$; 
 
  consn_src:=regexp_replace(consn_src,'<!qname!>', qname, 'g');
@@ -2610,6 +2609,43 @@ $BODY$
   LANGUAGE plpgsql IMMUTABLE
   COST 100;
 
+create or replace function mbus.estimated_messages(qname text) returns bigint as
+$code$
+/*
+do $CODE$
+-->>>estimated_messages
+declare
+ emc bigint;
+ qname text:='qqtestq';
+begin
+ perform mbus.create_queue(qname,8);
+ perform mbus.post_qqtestq(hstore('id', n::text)) from generate_series(1,100) as gs(n);
+ analyze mbus.qt$qqtestq;
+ emc:=mbus.estimated_messages(qname);
+ if emc is null then
+   raise exception 'Cannot get estimated messages count';
+ end if;  
+ emc:=mbus.estimated_messages(qname||'qqq');
+ if emc is not null then
+   raise exception 'Can get unexpected estimated messages count';
+ end if;  
+end;
+--<<<
+$CODE$
+*/
+
+declare
+ rv bigint;
+ begin
+   select reltuples::bigint into rv from pg_catalog.pg_class where oid=('mbus.qt$' || qname)::regclass;
+   return rv;
+ exception
+   when sqlstate '42P01' then 
+     raise notice 'Requested queue ''%'' does not exists', qname;
+     return null;  
+ end; 
+$code$
+language plpgsql;
 SELECT pg_catalog.pg_extension_config_dump('qt_model', '');
 SELECT pg_catalog.pg_extension_config_dump('consumer', '');
 SELECT pg_catalog.pg_extension_config_dump('dmq', '');
