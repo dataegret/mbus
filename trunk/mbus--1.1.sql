@@ -913,7 +913,7 @@ begin
 	$DDD$
 	LANGUAGE plpgsql VOLATILE
 	<!SECURITY_DEFINER!>
-    SET enable_seqscan = off set enable_indexscan=on set enable_indexonlyscan=on
+    SET enable_seqscan = off set enable_indexscan=on set enable_indexonlyscan=on set enable_sort = off
 	$CONS_SRC$; 
 
 	cons_src:=regexp_replace(cons_src,'<!qname!>', qname, 'g');
