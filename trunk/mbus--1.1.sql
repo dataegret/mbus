@@ -771,11 +771,15 @@ $_$;
 
 
 
-CREATE FUNCTION consume_temp(tqname text) 
-RETURNS SETOF qt_model
-LANGUAGE plpgsql
-AS $$
+-- Function: mbus.consume_temp(text)
+
+-- DROP FUNCTION mbus.consume_temp(text);
+
+CREATE OR REPLACE FUNCTION mbus.consume_temp(tqname text)
+  RETURNS SETOF mbus.qt_model AS
+$BODY$
 /*
+do $code$
 -->>>consume temporary queue
  declare
   tqid text:=mbus.create_temporary_queue();
@@ -783,24 +787,35 @@ AS $$
   begin
     perform mbus.create_queue('junk',32);
     perform mbus.post(tqid,'key=>val12'::hstore);
-    select * into rv from mbus.consume(tqid);
+    select * into rv from mbus.consume_temp1(tqid);
     if not found or (rv.data->'key') is distinct from 'val12' then
       raise exception 'Cannot consume expected message from temp q: got %', rv;
     end if;
   end;
 --<<<
+$code$
 */
 declare
 	rv mbus.qt_model;
+	r record;
 begin
-	select * into rv from mbus.tempq where (headers->'tempq')=tqname and coalesce(expires,'2070-01-01'::timestamp)>now()::timestamp and coalesce(delayed_until,'1970-01-01'::timestamp)<now()::timestamp order by added limit 1;
-	if rv.id is not null then
-    		delete from mbus.tempq where iid=rv.iid;
-    		return next rv;
- 	end if;   
-	return;
+ for r in 
+	select iid from mbus.tempq where (headers->'tempq')=tqname and coalesce(expires,'2070-01-01'::timestamp)>now()::timestamp and coalesce(delayed_until,'1970-01-01'::timestamp)<now()::timestamp order by added limit 32
+ loop
+     if pg_try_advisory_xact_lock(hashtext(r.iid)) then
+          delete from mbus.tempq where iid=r.iid returning * into rv;
+          return next rv;
+          return;
+     end if;
+ end loop; 	  
 end;
-$$;
+$BODY$
+  LANGUAGE plpgsql VOLATILE
+  SET enable_seqscan = off set enable_indexscan=on set enable_indexonlyscan=on set enable_sort = off
+  COST 100
+  ROWS 1;
+ALTER FUNCTION mbus.consume_temp(text)
+  OWNER TO postgres;
 
 
 CREATE FUNCTION create_consumer(cname text, qname text, p_selector text DEFAULT NULL::text, noindex boolean DEFAULT false)
@@ -1069,6 +1084,16 @@ $CONSN_SRC$;
  perform mbus.regenerate_functions(false);
 end;
 $_$;
+
+CREATE OR REPLACE FUNCTION mbus.create_queue()
+  RETURNS text AS
+$BODY$
+  select 'temp.perm.' || md5(pid::text || backend_start::text) || '.' || txid_current() from pg_stat_activity where pid=pg_backend_pid();
+$BODY$
+  LANGUAGE sql VOLATILE
+  COST 100;
+ALTER FUNCTION mbus.create_queue()
+  OWNER TO postgres;
 
 
 CREATE FUNCTION mbus.create_queue(qname text, consumers_cnt integer, is_roles_security_model boolean default null) 
@@ -1888,7 +1913,7 @@ CREATE FUNCTION readme_rus() RETURNS text
  3. request-response
 
  Еще умеют message selectorы, expiration и задержки доставки
- Payload'ом очереди является значение hstore (так что тип hstore должен быть установлен в базе)
+ Payload-ом очереди является значение hstore (так что тип hstore должен быть установлен в базе)
 
  Очередь создается функцией
   mbus.create_queue(qname, ncons, is_roles_security_model default false)
@@ -1900,6 +1925,13 @@ CREATE FUNCTION readme_rus() RETURNS text
   Если параметр is_roles_security_model установлен, то право на отправку сообщений в очередь
   получат только те пользователи, у которых есть роль mbus_<dbname>_post_<qname>, а на получение
   обладатели роли mbus_<dbname>_consume_<queue_name>_by_<consumer_name>.
+
+  Можно создать очередь, не указывая ее имени; mbus.create_queue(); в результате имя очереди будет сгенерировано.
+  Такая очередь обладает ограниченным функционалом:
+   1. Она не может иметь нескольких consumer-ов
+   2. Она доступна любому пользователю
+  Преимущества:
+   Таких очередей может быть очень много, десятки миллионов. Очистка ненужных очередей возлагается на разработчиков.
  
   Теперь в очередь можно помещать сообщения:
   select mbus.post_<qname>(data hstore, 
