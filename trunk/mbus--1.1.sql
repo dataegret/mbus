@@ -2373,6 +2373,8 @@ begin
                     case $FUNC$
                      || take_qry ||
                     $FUNC$
+                    else
+                     raise exception 'Unknown queue';
                     end case;
                     if rv is null then
                      delete from mbus.dmq q where iid=msgiid returning (q.*) into rv;
