@@ -787,7 +787,7 @@ do $code$
   begin
     perform mbus.create_queue('junk',32);
     perform mbus.post(tqid,'key=>val12'::hstore);
-    select * into rv from mbus.consume_temp1(tqid);
+    select * into rv from mbus.consume_temp(tqid);
     if not found or (rv.data->'key') is distinct from 'val12' then
       raise exception 'Cannot consume expected message from temp q: got %', rv;
     end if;
