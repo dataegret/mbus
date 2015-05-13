@@ -3,6 +3,7 @@
 
 SET lc_messages to 'en_US.UTF-8';
 
+drop sequence if exists seq;
 CREATE SEQUENCE seq
     START WITH 1
     INCREMENT BY 1
@@ -10,6 +11,7 @@ CREATE SEQUENCE seq
     NO MAXVALUE
     CACHE 100;
 
+drop sequence if exists qt_model_id_seq;
 CREATE SEQUENCE qt_model_id_seq
     START WITH 1
     INCREMENT BY 1
@@ -1881,7 +1883,7 @@ CREATE FUNCTION post_temp(tqname text, data hstore, headers hstore DEFAULT NULL:
                                 coalesce($5, now() - '1h'::interval),
                                 $6, 
                                 coalesce((headers->'enqueue_time')::timestamp,now()), 
-                                current_database() || '.' || nextval('mbus.seq'), 
+                                'temp.' || nextval('mbus.seq'), 
                                 array[]::int[] 
                                ) returning iid;
 
@@ -2259,7 +2261,7 @@ begin
  for r in select * from mbus.queue loop
    post_qry:=post_qry || $$ when '$$ || lower(r.qname) || $$' then return mbus.post_$$ || r.qname || '(data, headers, properties, delayed_until, expires);'||chr(10);
    msg_exists_qry := msg_exists_qry || 'when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then exists(select * from mbus.qt$' || r.qname || ' q where q.iid=$1 and not mbus.build_' || r.qname ||'_record_consumer_list(row(q.*)::mbus.qt_model) <@ q.received)'||chr(10);
-   peek_qry:= peek_qry || 'when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then (select row(q.*)::mbus.qt_model from mbus.qt$' || r.qname || ' q where q.iid=$1 )'||chr(10);
+   peek_qry:= peek_qry || '        when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then (select row(q.*)::mbus.qt_model from mbus.qt$' || r.qname || ' q where q.iid=$1 )'||chr(10);
    take_qry:= take_qry || '        when msgiid like $LIKE$' || lower(r.qname) || '.%$LIKE$ then delete from mbus.qt$' || r.qname || ' q where q.iid=$1 returning (q.*) into rv;'||chr(10);
    --create roles
    begin
@@ -2271,6 +2273,9 @@ begin
       perform mbus.create_queue(r.qname, r.consumers_cnt, r.is_roles_security_model);
    end if;
  end loop;
+   msg_exists_qry := msg_exists_qry || 'when $1 like $LIKE$temp.%$LIKE$ then exists(select * from mbus.tempq q where q.iid=$1) '||chr(10);
+   peek_qry:= peek_qry || '        when $1 like $LIKE$temp.%$LIKE$ then (select row(q.*)::mbus.qt_model from mbus.tempq q where q.iid=$1 )'||chr(10);
+   take_qry:= take_qry || '        when msgiid like $LIKE$temp.%$LIKE$ then delete from mbus.tempq q where q.iid=$1 returning (q.*) into rv;'||chr(10);
 
   --create functions for tests for visibility
   for r in 
