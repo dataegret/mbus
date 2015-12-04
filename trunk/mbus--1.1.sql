@@ -1316,7 +1316,7 @@ begin
 	select string_agg( 'select id from mbus.consumer where id=' || id::text ||' and ( (' || r.selector || ')' || (case when r.added is null then ')' else $$ and q.added >= '$$ || (r.added::text) || $$'::timestamp without time zone)$$ end) ||chr(10), ' union all '||chr(10))
   	into qry
   		from mbus.consumer r where qname='<!qname!>';
- 	execute 'delete from mbus.qt$<!qname!> q where expires < now() or (received <@ array(' || qry || '))';
+ 	execute 'delete from mbus.qt$<!qname!> q where expires < now() or (received @> array(' || qry || '))';
 	end; 
 	$ZZ$
 	language plpgsql
