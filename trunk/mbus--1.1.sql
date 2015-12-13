@@ -209,8 +209,8 @@ $code$
 do $testcode$
 -->>>Run it as superuser
  declare
-  rootconn text:='host=localhost port=5432 dbname=wrk user=postgres password=postgres';
-  conn text:='host=localhost port=5432 dbname=wrk user=qqqzzz password=zzzqqq';
+  rootconn text:='host=localhost port=5432 dbname=t2 user=postgres password=postgres';
+  conn text:='host=localhost port=5432 dbname=t2 user=qqqzzz password=zzzqqq';
  begin
    if not mbus._is_superuser() then
      raise exception 'Not superuser';     
@@ -474,7 +474,7 @@ $code$
 do $testcode$
 -->>>Run 
  declare
-  conn text:='host=localhost port=5432 dbname=wrk user=%<login> password=%<password>';
+  conn text:='host=localhost port=5432 dbname=t2 user=%<login> password=%<password>';
  begin
    create role qzzq unencrypted password 'lala' login;
    create role qzzq2 unencrypted password 'lala' login;
@@ -885,35 +885,18 @@ begin
 	begin
  		<!should_be_able_to_consume!>
 
-  		if version() like 'PostgreSQL 9.0%' then
-     			for r in 
-      				select * 
-        				from mbus.qt$<!qname!> t
-       					where <!consumer_id!><>all(received) and t.delayed_until<now() and (<!selector!>)=true and added >'<!now!>' and coalesce(expires,'2070-01-01'::timestamp) > now()::timestamp 
-                                        and (not exist(t.headers,'consume_after') or (select every(not mbus.is_msg_exists(u.v)) from unnest( ((t.headers)->'consume_after')::text[]) as u(v)))
-       					order by added, delayed_until
-       				limit <!consumers!>
-			loop
-				begin
-					select * into rv from mbus.qt$<!qname!> t where t.iid=r.iid and <!consumer_id!><>all(received) for update nowait;
-					continue when not found;
-					gotrecord:=true;
-					exit;
-				exception
-					when lock_not_available then null;
-				end;
-			end loop;
-  		else
-      			select * 
-        			into rv
-        			from mbus.qt$<!qname!> t
-       				where <!consumer_id!><>all(received) and t.delayed_until<now() and (<!selector!>)=true and added > '<!now!>' and coalesce(expires,'2070-01-01'::timestamp) > now()::timestamp 
-                                and ((t.headers->'consume_after') is null or (select every(not mbus.is_msg_exists(u.v)) from unnest( ((t.headers)->'consume_after')::text[]) as u(v)))
-         			and pg_try_advisory_xact_lock( hashtext(t.iid))
-       				order by added, delayed_until
-       				limit 1
-         		for update;
-  		end if;
+        select * 
+          into rv
+          from mbus.qt$<!qname!> t
+         where <!consumer_id!><>all(received) and t.delayed_until<now() and (<!selector!>)=true and added > '<!now!>' and coalesce(expires,'2070-01-01'::timestamp) > now()::timestamp 
+           and 
+          case when ((t.headers->'consume_after') is null or (select every(not mbus.is_msg_exists(u.v, <!consumer_id!>)) from unnest( ((t.headers)->'consume_after')::text[]) as u(v)))
+  			   then pg_try_advisory_xact_lock(hashtext(t.iid))
+               else false
+           end
+         order by added desc
+         limit 1
+  		for update;
 
 
 		if rv.iid is not null then 
@@ -967,47 +950,22 @@ declare
 begin
  	<!should_be_able_to_consume!>
 	rvarr:=array[]::mbus.qt_model[];
- 	if version() like 'PostgreSQL 9.0%' then  
-   		while coalesce(array_length(rvarr,1),0)<amt loop
-       		inloop:=false;
-       		for r in select * 
-                	from mbus.qt$<!qname!> t
-                 	where <!c_id!><>all(received) 
-			   and t.delayed_until<now() 
-			   and (<!selector!>)=true 
-			   and added > '<!now!>' 
-			   and coalesce(expires,'2070-01-01'::timestamp) > now()::timestamp 
-			   and t.iid not in (select a.iid from unnest(rvarr) as a)
-                           and (not exist(t.headers,'consume_after') or (select every(not mbus.is_msg_exists(u.v)) from unnest( ((t.headers)->'consume_after')::text[]) as u(v)))
-                 	order by added, delayed_until
-                	limit amt
-       		loop
-          		inloop:=true;
-          	begin
-              		select * into rv from mbus.qt$<!qname!> t where t.iid=r.iid and <!c_id!><>all(received) for update nowait;
-              		continue when not found;
-              		rvarr:=rvarr||rv;
-          	exception
-              		when lock_not_available then null;
-          	end;
-       	end loop; 
-       		exit when not inloop;
-    	end loop;
-  	else
-    	rvarr:=array(select row(t.* )::mbus.qt_model
-                   from mbus.qt$<!qname!> t
-                  where <!c_id!><>all(received) 
-                    and t.delayed_until<now() 
-                    and (<!selector!>)=true 
-                    and added > '<!now!>' 
-                    and coalesce(expires,'2070-01-01'::timestamp) > now()::timestamp 
-                    and (not exist(t.headers,'consume_after') or (select every(not mbus.is_msg_exists(u.v)) from unnest( ((t.headers)->'consume_after')::text[]) as u(v)))
-                    and pg_try_advisory_xact_lock(hashtext(t.iid))
-                  order by added, delayed_until
-                  limit amt
-                    for update
-                );
-  	end if;
+    rvarr:=array(select row(t.* )::mbus.qt_model
+               from mbus.qt$<!qname!> t
+              where <!c_id!><>all(received) 
+                and t.delayed_until<now() 
+                and (<!selector!>)=true 
+                and added > '<!now!>' 
+                and coalesce(expires,'2070-01-01'::timestamp) > now()::timestamp 
+                and 
+                case when (not exist(t.headers,'consume_after') or (select every(not mbus.is_msg_exists(u.v,<!consumer_id!>)) from unnest( ((t.headers)->'consume_after')::text[]) as u(v)))
+                     then pg_try_advisory_xact_lock(hashtext(t.iid))
+                     else false
+                 end
+              order by added desc
+              limit amt
+                for update
+            );
 
 	if array_length(rvarr,1)>0 then 
    		for rv in select * from unnest(rvarr) loop
@@ -2260,7 +2218,8 @@ begin
 
  for r in select * from mbus.queue loop
    post_qry:=post_qry || $$ when '$$ || lower(r.qname) || $$' then return mbus.post_$$ || r.qname || '(data, headers, properties, delayed_until, expires);'||chr(10);
-   msg_exists_qry := msg_exists_qry || 'when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then exists(select * from mbus.qt$' || r.qname || ' q where q.iid=$1 and not mbus.build_' || r.qname ||'_record_consumer_list(row(q.*)::mbus.qt_model) <@ q.received)'||chr(10);
+--   msg_exists_qry := msg_exists_qry || 'when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then exists(select * from mbus.qt$' || r.qname || ' q where q.iid=$1 and not mbus.build_' || r.qname ||'_record_consumer_list(row(q.*)::mbus.qt_model) <@ q.received)'||chr(10);
+   msg_exists_qry := msg_exists_qry || 'when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then exists(select * from mbus.qt$' || r.qname || ' q where q.iid=$1 and cons_id <>all(q.received))'||chr(10);
    peek_qry:= peek_qry || '        when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then (select row(q.*)::mbus.qt_model from mbus.qt$' || r.qname || ' q where q.iid=$1 )'||chr(10);
    take_qry:= take_qry || '        when msgiid like $LIKE$' || lower(r.qname) || '.%$LIKE$ then delete from mbus.qt$' || r.qname || ' q where q.iid=$1 returning (q.*) into rv;'||chr(10);
    --create roles
@@ -2273,14 +2232,14 @@ begin
       perform mbus.create_queue(r.qname, r.consumers_cnt, r.is_roles_security_model);
    end if;
  end loop;
-   msg_exists_qry := msg_exists_qry || 'when $1 like $LIKE$temp.%$LIKE$ then exists(select * from mbus.tempq q where q.iid=$1) '||chr(10);
+   msg_exists_qry := msg_exists_qry || '             when $1 like $LIKE$temp.%$LIKE$ then exists(select * from mbus.tempq q where q.iid=$1) '||chr(10);
    peek_qry:= peek_qry || '        when $1 like $LIKE$temp.%$LIKE$ then (select row(q.*)::mbus.qt_model from mbus.tempq q where q.iid=$1 )'||chr(10);
    take_qry:= take_qry || '        when msgiid like $LIKE$temp.%$LIKE$ then delete from mbus.tempq q where q.iid=$1 returning (q.*) into rv;'||chr(10);
 
   --create functions for tests for visibility
   for r in 
     select string_agg( 
-          'select '|| id::text ||' from t where 
+          'select '|| id::text ||' from (select qr.*) t where 
            ( (' 
           || cons.selector 
           || ')' 
@@ -2297,7 +2256,6 @@ begin
       $FUNC$
        begin
          return array( 
-         with t as (select qr.*)
           $RCL$ || r.src || $RCL$ );
        end;
       $FUNC$
@@ -2310,7 +2268,7 @@ begin
  
  if post_qry='' then
         begin
-          execute 'create or replace function mbus.is_msg_exists(msgiid text) returns boolean as $code$ select false; $code$ language sql';
+          execute 'create or replace function mbus.is_msg_exists(msgiid text, cons_id int) returns boolean as $code$ select false; $code$ language sql';
         end;
  else
         execute $FUNC$
@@ -2332,15 +2290,19 @@ begin
         $FUNC$;
 
         execute $FUNC$
-                create or replace function mbus.is_msg_exists(msgiid text) returns boolean as
+                create or replace function mbus.is_msg_exists(msgiid text, cons_id int) returns boolean as
                 $code$
                  select
-                    case $FUNC$
-                     || msg_exists_qry ||
-                    $FUNC$
-                    else
-                     false 
-                    end or exists(select * from mbus.dmq q where q.iid=$1);
+                  case when
+                            case $FUNC$
+                             || msg_exists_qry ||
+                            $FUNC$
+                            else
+                             false 
+                           end 
+                       then true 
+                       else exists(select * from mbus.dmq q where q.iid=$1)
+                  end;
                 $code$
                 language sql
                 security definer
