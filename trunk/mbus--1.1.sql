@@ -1229,7 +1229,7 @@ begin
                                 received
                                )values(
                                 $1,
-                                hstore('enqueue_time',coalesce((headers->'enqueue_time'),now()::timestamp::text)) ||
+                                hstore('enqueue_time',coalesce((headers->'enqueue_time'),clock_timestamp()::timestamp::text)) ||
                                 hstore('source_db', current_database())       ||
                                 hstore('destination_queue', $Q$<!qname!>$Q$)       ||
                                 coalesce($2,''::hstore)||
@@ -1238,7 +1238,7 @@ begin
                                 $3,
                                 coalesce($4, now() - '1h'::interval),
                                 $5, 
-                                coalesce((headers->'enqueue_time')::timestamp,now()), 
+                                coalesce((headers->'enqueue_time')::timestamp,clock_timestamp()), 
                                 coalesce($6, $Q$<!qname!>$Q$ || '.' || nextval('mbus.seq')),
                                 array[]::int[] 
                                ) returning iid;
