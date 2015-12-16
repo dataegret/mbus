@@ -894,7 +894,7 @@ begin
   			   then pg_try_advisory_xact_lock(hashtext(t.iid))
                else false
            end
-         order by added desc
+         order by added
          limit 1
   		for update;
 
