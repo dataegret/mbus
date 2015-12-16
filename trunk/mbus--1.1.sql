@@ -2218,8 +2218,7 @@ begin
 
  for r in select * from mbus.queue loop
    post_qry:=post_qry || $$ when '$$ || lower(r.qname) || $$' then return mbus.post_$$ || r.qname || '(data, headers, properties, delayed_until, expires);'||chr(10);
---   msg_exists_qry := msg_exists_qry || 'when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then exists(select * from mbus.qt$' || r.qname || ' q where q.iid=$1 and not mbus.build_' || r.qname ||'_record_consumer_list(row(q.*)::mbus.qt_model) <@ q.received)'||chr(10);
-   msg_exists_qry := msg_exists_qry || 'when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then exists(select * from mbus.qt$' || r.qname || ' q where q.iid=$1 and cons_id <>all(q.received))'||chr(10);
+   msg_exists_qry := msg_exists_qry || 'when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then exists(select * from mbus.qt$' || r.qname || ' q where q.iid=$1 and cons_id <>all(q.received) and q.expires>now())'||chr(10);
    peek_qry:= peek_qry || '        when $1 like $LIKE$' || lower(r.qname) || '.%$LIKE$ then (select row(q.*)::mbus.qt_model from mbus.qt$' || r.qname || ' q where q.iid=$1 )'||chr(10);
    take_qry:= take_qry || '        when msgiid like $LIKE$' || lower(r.qname) || '.%$LIKE$ then delete from mbus.qt$' || r.qname || ' q where q.iid=$1 returning (q.*) into rv;'||chr(10);
    --create roles
