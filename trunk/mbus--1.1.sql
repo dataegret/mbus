@@ -495,7 +495,7 @@ begin
   end if;
 
   if not exists(select * from mbus.queue q where q.qname=_create_consumer_role.qname) then
-      raise exception 'Queue % does not exist';
+      raise exception 'Queue % does not exist', qname;
   end if;
 
   begin
