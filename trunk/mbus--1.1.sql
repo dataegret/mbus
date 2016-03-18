@@ -1295,7 +1295,7 @@ begin
   	returns mbus.qt_model as
   	$PRC$
    	select case 
-              when <!should_be_able_to_consume!> is not null and $1 is null then (select row(q.*)::mbus.qt_model from mbus.qt$<!qname!> q)
+              when <!should_be_able_to_consume!> is not null and $1 is null then (select row(q.*)::mbus.qt_model from mbus.qt$<!qname!> q limit 1)
               else (select row(q.*)::mbus.qt_model from mbus.qt$<!qname!> q where iid=$1)::mbus.qt_model
         end;
   	$PRC$
